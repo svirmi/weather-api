@@ -6,17 +6,18 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 )
 
 const (
-	upstreamURL = "https://api.weather.com/v3/wx/forecast/hourly/2day" +
-		"?icaoCode=RJTT&units=m&language=en-US&format=json" +
-		"&apiKey=e1f10a1e78da46f5b10a1e78da96f525"
 	cacheTTL   = 5 * time.Minute
 	listenAddr = ":8080"
 )
+
+// upstreamURL is built at startup from the WEATHER_API_KEY env var.
+var upstreamURL string
 
 type cache struct {
 	mu        sync.RWMutex
@@ -99,10 +100,7 @@ func weatherHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Cache", "MISS")
 	}
 
-	_, fetchedAt, age, _ := func() ([]byte, time.Time, time.Duration, bool) {
-		fa, a, v := globalCache.status()
-		return nil, fa, a, v
-	}()
+	fetchedAt, age, _ := globalCache.status()
 	w.Header().Set("X-Cache-Age", age.Round(time.Second).String())
 	w.Header().Set("X-Cache-Fetched-At", fetchedAt.UTC().Format(time.RFC3339))
 	w.Header().Set("X-Cache-Expires-In", (cacheTTL - age).Round(time.Second).String())
@@ -154,13 +152,21 @@ func invalidateHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	apiKey := os.Getenv("WEATHER_DOT_COM")
+	if apiKey == "" {
+		log.Fatal("WEATHER_DOT_COM environment variable is not set")
+	}
+
+	upstreamURL = "https://api.weather.com/v3/wx/forecast/hourly/2day" +
+		"?icaoCode=RJTT&units=m&language=en-US&format=json" +
+		"&apiKey=" + apiKey
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/weather", weatherHandler)
 	mux.HandleFunc("/status", statusHandler)
 	mux.HandleFunc("/cache", invalidateHandler)
 
 	log.Printf("weather proxy listening on %s", listenAddr)
-	log.Printf("upstream: %s", upstreamURL)
 	log.Printf("cache TTL: %s", cacheTTL)
 
 	if err := http.ListenAndServe(listenAddr, mux); err != nil {
