@@ -3,173 +3,276 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 )
 
+// --- Configuration ---
+
 const (
-	cacheTTL   = 5 * time.Minute
-	listenAddr = ":8080"
+	Max15mSlots    = 124 // 31 hours
+	MaxHrSlots     = 72  // 72 hours
+	PollInterval   = 3 * time.Minute
+	MaxConcurrency = 4 // Gentle API limit
+	ListenAddr     = ":8080"
 )
 
-// upstreamURL is built at startup from the WEATHER_API_KEY env var.
-var upstreamURL string
-
-type cache struct {
-	mu        sync.RWMutex
-	body      []byte
-	fetchedAt time.Time
+type Slot struct {
+	Temp      float32
+	Timestamp int64
 }
 
-func (c *cache) get() ([]byte, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if c.body == nil || time.Since(c.fetchedAt) > cacheTTL {
-		return nil, false
+type LocationStore struct {
+	ID           string
+	Buffer15m    [Max15mSlots]Slot
+	BufferHr     [MaxHrSlots]Slot
+	LastSync15m  time.Time
+	LastSyncHr   time.Time
+	SyncCount15m int
+	SyncCountHr  int
+	mu           sync.RWMutex
+}
+
+type WeatherRegistry struct {
+	Locations map[string]*LocationStore
+	ApiKey    string
+}
+
+// --- Logic Engine ---
+
+func (r *WeatherRegistry) Update(id string, data WeatherResponse, is15m bool) {
+	store, ok := r.Locations[id]
+	if !ok {
+		return
 	}
-	return c.body, true
-}
 
-func (c *cache) set(body []byte) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.body = body
-	c.fetchedAt = time.Now()
-}
+	store.mu.Lock()
+	defer store.mu.Unlock()
 
-func (c *cache) status() (fetchedAt time.Time, age time.Duration, valid bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	if c.body == nil {
-		return time.Time{}, 0, false
+	if len(data.Temperature) == 0 {
+		log.Printf("⚠️  [%s] API returned empty arrays", id)
+		return
 	}
-	age = time.Since(c.fetchedAt)
-	return c.fetchedAt, age, age <= cacheTTL
+
+	for i, temp := range data.Temperature {
+		var ts int64
+		if is15m {
+			t, err := time.Parse("2006-01-02T15:04:05-0700", data.ValidTimeLocal[i])
+			if err != nil {
+				continue
+			}
+			ts = t.Unix()
+			idx := (ts / 900) % Max15mSlots
+			store.Buffer15m[idx] = Slot{Temp: temp, Timestamp: ts}
+		} else {
+			if i >= len(data.ValidTimeUtc) {
+				break
+			}
+			ts = data.ValidTimeUtc[i]
+			idx := (ts / 3600) % MaxHrSlots
+			store.BufferHr[idx] = Slot{Temp: temp, Timestamp: ts}
+		}
+	}
+
+	if is15m {
+		store.LastSync15m = time.Now()
+		store.SyncCount15m++
+	} else {
+		store.LastSyncHr = time.Now()
+		store.SyncCountHr++
+	}
+	log.Printf("✅ [%s] Updated %s (%d points)", id, map[bool]string{true: "15m", false: "Hr"}[is15m], len(data.Temperature))
 }
 
-var globalCache = &cache{}
+func (s *LocationStore) GetData(startTs, endTs int64) []map[string]any {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 
-func fetchUpstream() ([]byte, error) {
-	resp, err := http.Get(upstreamURL)
+	// Initializing as empty slice to avoid 'null' in JSON
+	result := []map[string]any{}
+
+	for t := (startTs / 900) * 900; t <= endTs; t += 900 {
+		entry := map[string]any{"t": time.Unix(t, 0).UTC().Format(time.RFC3339)}
+		found := false
+
+		idx15 := (t / 900) % Max15mSlots
+		if s.Buffer15m[idx15].Timestamp == t {
+			entry["v_15m"] = s.Buffer15m[idx15].Temp
+			found = true
+		}
+
+		if t%3600 == 0 {
+			idxHr := (t / 3600) % MaxHrSlots
+			if s.BufferHr[idxHr].Timestamp == t {
+				entry["v_hr"] = s.BufferHr[idxHr].Temp
+				found = true
+			}
+		}
+
+		if found {
+			result = append(result, entry)
+		}
+	}
+	return result
+}
+
+// --- Background Sync ---
+
+func startPoller(reg *WeatherRegistry) {
+	sem := make(chan struct{}, MaxConcurrency)
+	ticker := time.NewTicker(PollInterval)
+
+	run := func() {
+		log.Println("🔄 Starting batch sync...")
+		var wg sync.WaitGroup
+		for id := range reg.Locations {
+			// 15 Min Fetch
+			wg.Add(1)
+			go func(locID string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				url := fmt.Sprintf("https://api.weather.com/v3/wx/forecast/fifteenminute?icaoCode=%s&units=m&language=en-US&apiKey=%s&format=json", locID, reg.ApiKey)
+				fetchAndUpdate(reg, locID, url, true)
+			}(id)
+
+			// Hourly Fetch
+			wg.Add(1)
+			go func(locID string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				url := fmt.Sprintf("https://api.weather.com/v3/wx/forecast/hourly/2day?icaoCode=%s&units=m&language=en-US&apiKey=%s&format=json", locID, reg.ApiKey)
+				fetchAndUpdate(reg, locID, url, false)
+			}(id)
+		}
+		wg.Wait()
+		log.Println("✨ Batch sync finished.")
+	}
+
+	go func() {
+		run()
+		for range ticker.C {
+			run()
+		}
+	}()
+}
+
+func fetchAndUpdate(reg *WeatherRegistry, id, url string, is15m bool) {
+	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("upstream request failed: %w", err)
+		log.Printf("❌ [%s] Request Error: %v", id, err)
+		return
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("❌ [%s] Network Error: %v", id, err)
+		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("upstream returned status %d", resp.StatusCode)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading upstream body: %w", err)
-	}
-	return body, nil
-}
-
-// GET /weather — proxied + cached response
-func weatherHandler(w http.ResponseWriter, r *http.Request) {
-	cacheHit := true
-	body, ok := globalCache.get()
-
-	if !ok {
-		cacheHit = false
-		log.Println("cache miss — fetching from upstream")
-
-		var err error
-		body, err = fetchUpstream()
-		if err != nil {
-			log.Printf("upstream error: %v", err)
-			http.Error(w, `{"error":"upstream fetch failed"}`, http.StatusBadGateway)
-			return
-		}
-		globalCache.set(body)
-		log.Println("cache populated")
-	} else {
-		log.Println("cache hit")
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if cacheHit {
-		w.Header().Set("X-Cache", "HIT")
-	} else {
-		w.Header().Set("X-Cache", "MISS")
-	}
-
-	fetchedAt, age, _ := globalCache.status()
-	w.Header().Set("X-Cache-Age", age.Round(time.Second).String())
-	w.Header().Set("X-Cache-Fetched-At", fetchedAt.UTC().Format(time.RFC3339))
-	w.Header().Set("X-Cache-Expires-In", (cacheTTL - age).Round(time.Second).String())
-
-	w.WriteHeader(http.StatusOK)
-	w.Write(body)
-}
-
-// GET /status — cache diagnostics
-func statusHandler(w http.ResponseWriter, r *http.Request) {
-	fetchedAt, age, valid := globalCache.status()
-
-	info := map[string]any{
-		"cache_valid": valid,
-		"ttl":         cacheTTL.String(),
-	}
-	if !fetchedAt.IsZero() {
-		info["fetched_at"] = fetchedAt.UTC().Format(time.RFC3339)
-		info["age"] = age.Round(time.Second).String()
-		if valid {
-			info["expires_in"] = (cacheTTL - age).Round(time.Second).String()
-		} else {
-			info["expires_in"] = "expired"
-		}
-	} else {
-		info["fetched_at"] = nil
-		info["age"] = nil
-		info["expires_in"] = nil
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(info)
-}
-
-// DELETE /cache — force cache invalidation
-func invalidateHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		log.Printf("❌ [%s] API Error: Status %d", id, resp.StatusCode)
 		return
 	}
-	globalCache.mu.Lock()
-	globalCache.body = nil
-	globalCache.fetchedAt = time.Time{}
-	globalCache.mu.Unlock()
 
-	log.Println("cache invalidated via API")
-	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"message":"cache cleared"}`))
+	var data WeatherResponse
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		log.Printf("❌ [%s] JSON Error: %v", id, err)
+		return
+	}
+	reg.Update(id, data, is15m)
 }
+
+// --- Handlers ---
 
 func main() {
 	apiKey := os.Getenv("WEATHER_DOT_COM")
 	if apiKey == "" {
-		log.Fatal("WEATHER_DOT_COM environment variable is not set")
+		log.Println("Set WEATHER_DOT_COM environment variable. Default used.")
+		apiKey = "e1f10a1e78da46f5b10a1e78da96f525"
 	}
 
-	upstreamURL = "https://api.weather.com/v3/wx/forecast/hourly/2day" +
-		"?icaoCode=RJTT&units=m&language=en-US&format=json" +
-		"&apiKey=" + apiKey
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/weather", weatherHandler)
-	mux.HandleFunc("/status", statusHandler)
-	mux.HandleFunc("/cache", invalidateHandler)
-
-	log.Printf("weather proxy listening on %s", listenAddr)
-	log.Printf("cache TTL: %s", cacheTTL)
-
-	if err := http.ListenAndServe(listenAddr, mux); err != nil {
-		log.Fatalf("server error: %v", err)
+	ids := []string{"RJTT", "LLBG"}
+	registry := &WeatherRegistry{
+		Locations: make(map[string]*LocationStore),
+		ApiKey:    apiKey,
 	}
+
+	for _, id := range ids {
+		registry.Locations[id] = &LocationStore{ID: id}
+	}
+
+	startPoller(registry)
+
+	// GET /weather/{id}
+	http.HandleFunc("/weather/", func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Path[len("/weather/"):]
+		store, ok := registry.Locations[id]
+		if !ok {
+			http.Error(w, "Unknown Location", 404)
+			return
+		}
+		start, end := getTimeBounds(r)
+		renderJSON(w, store.GetData(start, end))
+	})
+
+	// GET /weather/all
+	http.HandleFunc("/weather/all", func(w http.ResponseWriter, r *http.Request) {
+		start, end := getTimeBounds(r)
+		out := make(map[string]any)
+		for id, store := range registry.Locations {
+			out[id] = store.GetData(start, end)
+		}
+		renderJSON(w, out)
+	})
+
+	// GET /health
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		stats := make(map[string]any)
+		for id, s := range registry.Locations {
+			s.mu.RLock()
+			stats[id] = map[string]any{
+				"last_15m":    s.LastSync15m.Format(time.RFC1123),
+				"last_hr":     s.LastSyncHr.Format(time.RFC1123),
+				"total_syncs": s.SyncCount15m + s.SyncCountHr,
+			}
+			s.mu.RUnlock()
+		}
+		renderJSON(w, stats)
+	})
+
+	log.Printf("Weather Engine LIVE on %s", ListenAddr)
+	log.Fatal(http.ListenAndServe(ListenAddr, nil))
+}
+
+func getTimeBounds(r *http.Request) (int64, int64) {
+	now := time.Now().Unix()
+	s, _ := strconv.ParseInt(r.URL.Query().Get("start"), 10, 64)
+	if s == 0 {
+		s = now - 86400
+	} // -24h
+	e, _ := strconv.ParseInt(r.URL.Query().Get("end"), 10, 64)
+	if e == 0 {
+		e = now + 172800
+	} // +48h
+	return s, e
+}
+
+func renderJSON(w http.ResponseWriter, data any) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(data)
+}
+
+type WeatherResponse struct {
+	Temperature    []float32 `json:"temperature"`
+	ValidTimeLocal []string  `json:"validTimeLocal"`
+	ValidTimeUtc   []int64   `json:"validTimeUtc"`
 }
