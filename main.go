@@ -61,6 +61,7 @@ func (r *WeatherRegistry) Update(id string, data WeatherResponse, is15m bool) {
 	for i, temp := range data.Temperature {
 		var ts int64
 		if is15m {
+			// External API provides string for 15m; we convert to Unix here
 			t, err := time.Parse("2006-01-02T15:04:05-0700", data.ValidTimeLocal[i])
 			if err != nil {
 				continue
@@ -69,6 +70,7 @@ func (r *WeatherRegistry) Update(id string, data WeatherResponse, is15m bool) {
 			idx := (ts / 900) % Max15mSlots
 			store.Buffer15m[idx] = Slot{Temp: temp, Timestamp: ts}
 		} else {
+			// External API provides Unix for Hourly
 			if i >= len(data.ValidTimeUtc) {
 				break
 			}
@@ -92,23 +94,33 @@ func (s *LocationStore) GetData(startTs, endTs int64) []map[string]any {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Initializing as empty slice to avoid 'null' in JSON
 	result := []map[string]any{}
 
 	for t := (startTs / 900) * 900; t <= endTs; t += 900 {
-		entry := map[string]any{"t": time.Unix(t, 0).UTC().Format(time.RFC3339)}
+		entry := map[string]any{
+			"t":       time.Unix(t, 0).UTC().Format(time.RFC3339),
+			"unix_ts": t,
+		}
+
 		found := false
 
+		// Check 15m buffer — higher resolution, takes priority
 		idx15 := (t / 900) % Max15mSlots
 		if s.Buffer15m[idx15].Timestamp == t {
-			entry["v_15m"] = s.Buffer15m[idx15].Temp
+			entry["v"] = s.Buffer15m[idx15].Temp
+			entry["res"] = "15m"
 			found = true
 		}
 
+		// Check Hourly buffer (only on full hours)
 		if t%3600 == 0 {
 			idxHr := (t / 3600) % MaxHrSlots
 			if s.BufferHr[idxHr].Timestamp == t {
-				entry["v_hr"] = s.BufferHr[idxHr].Temp
+				// Only set v/res from hourly if 15m didn't already claim this slot
+				if !found {
+					entry["v"] = s.BufferHr[idxHr].Temp
+					entry["res"] = "hr"
+				}
 				found = true
 			}
 		}
@@ -117,6 +129,7 @@ func (s *LocationStore) GetData(startTs, endTs int64) []map[string]any {
 			result = append(result, entry)
 		}
 	}
+
 	return result
 }
 
@@ -168,9 +181,10 @@ func fetchAndUpdate(reg *WeatherRegistry, id, url string, is15m bool) {
 		log.Printf("❌ [%s] Request Error: %v", id, err)
 		return
 	}
+	// Mimic browser to avoid potential bot blocking
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("❌ [%s] Network Error: %v", id, err)
@@ -196,7 +210,7 @@ func fetchAndUpdate(reg *WeatherRegistry, id, url string, is15m bool) {
 func main() {
 	apiKey := os.Getenv("WEATHER_DOT_COM")
 	if apiKey == "" {
-		log.Println("Set WEATHER_DOT_COM environment variable. Default used.")
+		log.Println("⚠️ Set WEATHER_DOT_COM environment variable. Default used.")
 		apiKey = "e1f10a1e78da46f5b10a1e78da96f525"
 	}
 
