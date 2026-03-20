@@ -130,7 +130,7 @@ func startPoller(reg *WeatherRegistry) {
 		log.Println("🔄 Starting batch sync...")
 		var wg sync.WaitGroup
 		for id := range reg.Locations {
-			// 15 Min Fetch
+			// 15 Min forecast data Fetch
 			wg.Add(1)
 			go func(locID string) {
 				defer wg.Done()
@@ -140,7 +140,7 @@ func startPoller(reg *WeatherRegistry) {
 				fetchAndUpdate(reg, locID, url, true)
 			}(id)
 
-			// Hourly Fetch
+			// Hourly forecast data Fetch
 			wg.Add(1)
 			go func(locID string) {
 				defer wg.Done()
