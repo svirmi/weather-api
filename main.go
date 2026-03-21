@@ -131,27 +131,26 @@ func (r *WeatherRegistry) UpdateCurrent(id string, data ObservationResponse) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 
-	// Snap to nearest 5-min boundary — absorbs minor API delivery jitter
-	// so the ring buffer index is always stable and predictable
-	snapped := (data.ValidTimeUtc / 300) * 300
-
+	// Use the real station measurement timestamp throughout.
+	// Stations report at irregular offsets within the hour (e.g. CYYZ reports
+	// at :15/:25/:35) — this is honest data and charting libraries handle
+	// sparse time-series natively. Storing at a fake grid time would place
+	// the observed point at a time we have no measurement for.
 	slot := Slot{
 		Temp:      float32(data.Temperature),
-		Timestamp: snapped,
+		Timestamp: data.ValidTimeUtc,
 	}
 
-	// Update latest single reading (used for the "now" marker)
 	store.Current = slot
 
-	// Write into observation history ring buffer
-	idx := (snapped / 300) % MaxObsSlots
+	idx := (data.ValidTimeUtc / 300) % MaxObsSlots
 	store.BufferObs[idx] = slot
 
 	store.LastSyncCurr = time.Now()
 	store.SyncCountCurr++
-	log.Printf("✅ [%s] Updated obs (%.1f°C @ %s)", id,
+	log.Printf("\u2705 [%s] Updated obs (%.1f\u00b0C @ %s)", id,
 		float32(data.Temperature),
-		time.Unix(snapped, 0).UTC().Format(time.RFC3339))
+		time.Unix(data.ValidTimeUtc, 0).UTC().Format(time.RFC3339))
 }
 
 func (s *LocationStore) GetData(startTs, endTs int64) map[string]any {
@@ -224,14 +223,6 @@ func (s *LocationStore) GetData(startTs, endTs int64) map[string]any {
 
 // --- Background Sync ---
 
-// nextAligned returns duration to sleep until the next clock-aligned boundary.
-// e.g. with interval=5min: if now is 11:03, returns ~2min until 11:05.
-func nextAligned(interval time.Duration) time.Duration {
-	now := time.Now()
-	next := now.Truncate(interval).Add(interval)
-	return next.Sub(now)
-}
-
 func startPoller(reg *WeatherRegistry) {
 	sem := make(chan struct{}, MaxConcurrency)
 
@@ -289,7 +280,7 @@ func startPoller(reg *WeatherRegistry) {
 		runForecasts()
 		runObservations()
 
-		// Forecast ticker: every 3 minutes (simple, no alignment needed)
+		// Forecast ticker: simple 3-minute interval, no alignment needed
 		go func() {
 			ticker := time.NewTicker(PollInterval)
 			for range ticker.C {
@@ -297,20 +288,29 @@ func startPoller(reg *WeatherRegistry) {
 			}
 		}()
 
-		// Observation ticker: clock-aligned to 5-minute marks (:00, :05, :10 ...)
-		// Sleep until next boundary, fire, then tick every 5 minutes exactly.
-		waitFor := nextAligned(5 * time.Minute)
-		log.Printf("⏱  Next observation sync in %s (at %s UTC)",
-			waitFor.Round(time.Second),
-			time.Now().Add(waitFor).UTC().Format("15:04:05"))
-
-		time.Sleep(waitFor)
-		runObservations()
-
-		obsTicker := time.NewTicker(5 * time.Minute)
-		for range obsTicker.C {
-			runObservations()
-		}
+		// Observation ticker: wall-clock driven, fires at :00/:05/:10.../:55
+		//
+		// Rather than Sleep+Ticker (which drifts) we check a coarse 30-second
+		// ticker against the actual wall clock. When the current time falls
+		// within 30 seconds after a 5-minute boundary AND we haven't already
+		// fired for that boundary, we run. This is self-correcting by design —
+		// restarts, slow networks, or long runs cannot cause drift or skips.
+		go func() {
+			ticker := time.NewTicker(30 * time.Second)
+			var lastFired time.Time
+			for tick := range ticker.C {
+				boundary := tick.Truncate(5 * time.Minute)
+				// Fire if:
+				// 1. We are within 30s after a 5-min boundary (not before it)
+				// 2. We haven't already fired for this boundary
+				if tick.Sub(boundary) < 30*time.Second && boundary.After(lastFired) {
+					lastFired = boundary
+					log.Printf("⏱  Observation tick at boundary %s UTC",
+						boundary.UTC().Format("15:04:05"))
+					runObservations()
+				}
+			}
+		}()
 	}()
 }
 
