@@ -294,7 +294,7 @@ func main() {
 	startPoller(registry)
 
 	// GET /weather/{id}
-	http.HandleFunc("/weather/", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/weather/", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		id := r.URL.Path[len("/weather/"):]
 		store, ok := registry.Locations[id]
 		if !ok {
@@ -303,20 +303,20 @@ func main() {
 		}
 		start, end := getTimeBounds(r)
 		renderJSON(w, store.GetData(start, end))
-	})
+	}))
 
 	// GET /weather/all
-	http.HandleFunc("/weather/all", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/weather/all", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		start, end := getTimeBounds(r)
 		out := make(map[string]any)
 		for id, store := range registry.Locations {
 			out[id] = store.GetData(start, end)
 		}
 		renderJSON(w, out)
-	})
+	}))
 
 	// GET /health
-	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc("/health", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		stats := make(map[string]any)
 		for id, s := range registry.Locations {
 			s.mu.RLock()
@@ -329,7 +329,7 @@ func main() {
 			s.mu.RUnlock()
 		}
 		renderJSON(w, stats)
-	})
+	}))
 
 	log.Printf("Weather Engine LIVE on %s", ListenAddr)
 	log.Fatal(http.ListenAndServe(ListenAddr, nil))
@@ -364,4 +364,17 @@ type WeatherResponse struct {
 type ObservationResponse struct {
 	Temperature  int   `json:"temperature"`
 	ValidTimeUtc int64 `json:"validTimeUtc"`
+}
+
+func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next(w, r)
+	}
 }
