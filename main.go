@@ -12,7 +12,6 @@ import (
 )
 
 // --- Configuration ---
-
 const (
 	Max15mSlots    = 124 // 31 hours
 	MaxHrSlots     = 72  // 72 hours
@@ -27,14 +26,17 @@ type Slot struct {
 }
 
 type LocationStore struct {
-	ID           string
-	Buffer15m    [Max15mSlots]Slot
-	BufferHr     [MaxHrSlots]Slot
-	LastSync15m  time.Time
-	LastSyncHr   time.Time
-	SyncCount15m int
-	SyncCountHr  int
-	mu           sync.RWMutex
+	ID            string
+	Buffer15m     [Max15mSlots]Slot
+	BufferHr      [MaxHrSlots]Slot
+	Current       Slot
+	LastSync15m   time.Time
+	LastSyncHr    time.Time
+	LastSyncCurr  time.Time
+	SyncCount15m  int
+	SyncCountHr   int
+	SyncCountCurr int
+	mu            sync.RWMutex
 }
 
 type WeatherRegistry struct {
@@ -49,7 +51,6 @@ func (r *WeatherRegistry) Update(id string, data WeatherResponse, is15m bool) {
 	if !ok {
 		return
 	}
-
 	store.mu.Lock()
 	defer store.mu.Unlock()
 
@@ -61,7 +62,6 @@ func (r *WeatherRegistry) Update(id string, data WeatherResponse, is15m bool) {
 	for i, temp := range data.Temperature {
 		var ts int64
 		if is15m {
-			// External API provides string for 15m; we convert to Unix here
 			t, err := time.Parse("2006-01-02T15:04:05-0700", data.ValidTimeLocal[i])
 			if err != nil {
 				continue
@@ -70,7 +70,6 @@ func (r *WeatherRegistry) Update(id string, data WeatherResponse, is15m bool) {
 			idx := (ts / 900) % Max15mSlots
 			store.Buffer15m[idx] = Slot{Temp: temp, Timestamp: ts}
 		} else {
-			// External API provides Unix for Hourly
 			if i >= len(data.ValidTimeUtc) {
 				break
 			}
@@ -90,12 +89,39 @@ func (r *WeatherRegistry) Update(id string, data WeatherResponse, is15m bool) {
 	log.Printf("✅ [%s] Updated %s (%d points)", id, map[bool]string{true: "15m", false: "Hr"}[is15m], len(data.Temperature))
 }
 
-func (s *LocationStore) GetData(startTs, endTs int64) []map[string]any {
+func (r *WeatherRegistry) UpdateCurrent(id string, data ObservationResponse) {
+	store, ok := r.Locations[id]
+	if !ok {
+		return
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+
+	store.Current = Slot{
+		Temp:      float32(data.Temperature),
+		Timestamp: data.ValidTimeUtc,
+	}
+	store.LastSyncCurr = time.Now()
+	store.SyncCountCurr++
+	log.Printf("✅ [%s] Updated current (%.1f°C @ %s)", id, float32(data.Temperature), time.Unix(data.ValidTimeUtc, 0).UTC().Format(time.RFC3339))
+}
+
+func (s *LocationStore) GetData(startTs, endTs int64) map[string]any {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	result := []map[string]any{}
+	// Current observation — nil if never fetched
+	var current any
+	if s.Current.Timestamp > 0 {
+		current = map[string]any{
+			"t":       time.Unix(s.Current.Timestamp, 0).UTC().Format(time.RFC3339),
+			"unix_ts": s.Current.Timestamp,
+			"v":       s.Current.Temp,
+		}
+	}
 
+	// Forecast points
+	forecast := []map[string]any{}
 	for t := (startTs / 900) * 900; t <= endTs; t += 900 {
 		entry := map[string]any{
 			"t":       time.Unix(t, 0).UTC().Format(time.RFC3339),
@@ -104,7 +130,7 @@ func (s *LocationStore) GetData(startTs, endTs int64) []map[string]any {
 
 		found := false
 
-		// Check 15m buffer — higher resolution, takes priority
+		// 15m takes priority
 		idx15 := (t / 900) % Max15mSlots
 		if s.Buffer15m[idx15].Timestamp == t {
 			entry["v"] = s.Buffer15m[idx15].Temp
@@ -112,11 +138,10 @@ func (s *LocationStore) GetData(startTs, endTs int64) []map[string]any {
 			found = true
 		}
 
-		// Check Hourly buffer (only on full hours)
+		// Hourly — only on full hours, only if 15m didn't claim this slot
 		if t%3600 == 0 {
 			idxHr := (t / 3600) % MaxHrSlots
 			if s.BufferHr[idxHr].Timestamp == t {
-				// Only set v/res from hourly if 15m didn't already claim this slot
 				if !found {
 					entry["v"] = s.BufferHr[idxHr].Temp
 					entry["res"] = "hr"
@@ -126,11 +151,14 @@ func (s *LocationStore) GetData(startTs, endTs int64) []map[string]any {
 		}
 
 		if found {
-			result = append(result, entry)
+			forecast = append(forecast, entry)
 		}
 	}
 
-	return result
+	return map[string]any{
+		"current":  current,
+		"forecast": forecast,
+	}
 }
 
 // --- Background Sync ---
@@ -142,8 +170,9 @@ func startPoller(reg *WeatherRegistry) {
 	run := func() {
 		log.Println("🔄 Starting batch sync...")
 		var wg sync.WaitGroup
+
 		for id := range reg.Locations {
-			// 15 Min forecast data Fetch
+			// 15m forecast
 			wg.Add(1)
 			go func(locID string) {
 				defer wg.Done()
@@ -153,7 +182,7 @@ func startPoller(reg *WeatherRegistry) {
 				fetchAndUpdate(reg, locID, url, true)
 			}(id)
 
-			// Hourly forecast data Fetch
+			// Hourly forecast
 			wg.Add(1)
 			go func(locID string) {
 				defer wg.Done()
@@ -162,7 +191,18 @@ func startPoller(reg *WeatherRegistry) {
 				url := fmt.Sprintf("https://api.weather.com/v3/wx/forecast/hourly/2day?icaoCode=%s&units=m&language=en-US&apiKey=%s&format=json", locID, reg.ApiKey)
 				fetchAndUpdate(reg, locID, url, false)
 			}(id)
+
+			// Current observation
+			wg.Add(1)
+			go func(locID string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				url := fmt.Sprintf("https://api.weather.com/v3/wx/observations/current?icaoCode=%s&units=m&language=en-US&apiKey=%s&format=json", locID, reg.ApiKey)
+				fetchAndUpdateCurrent(reg, locID, url)
+			}(id)
 		}
+
 		wg.Wait()
 		log.Println("✨ Batch sync finished.")
 	}
@@ -181,7 +221,6 @@ func fetchAndUpdate(reg *WeatherRegistry, id, url string, is15m bool) {
 		log.Printf("❌ [%s] Request Error: %v", id, err)
 		return
 	}
-	// Mimic browser to avoid potential bot blocking
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
 	client := &http.Client{Timeout: 15 * time.Second}
@@ -205,6 +244,35 @@ func fetchAndUpdate(reg *WeatherRegistry, id, url string, is15m bool) {
 	reg.Update(id, data, is15m)
 }
 
+func fetchAndUpdateCurrent(reg *WeatherRegistry, id, url string) {
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		log.Printf("❌ [%s] Current Request Error: %v", id, err)
+		return
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("❌ [%s] Current Network Error: %v", id, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("❌ [%s] Current API Error: Status %d", id, resp.StatusCode)
+		return
+	}
+
+	var data ObservationResponse
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		log.Printf("❌ [%s] Current JSON Error: %v", id, err)
+		return
+	}
+	reg.UpdateCurrent(id, data)
+}
+
 // --- Handlers ---
 
 func main() {
@@ -219,7 +287,6 @@ func main() {
 		Locations: make(map[string]*LocationStore),
 		ApiKey:    apiKey,
 	}
-
 	for _, id := range ids {
 		registry.Locations[id] = &LocationStore{ID: id}
 	}
@@ -256,7 +323,8 @@ func main() {
 			stats[id] = map[string]any{
 				"last_15m":    s.LastSync15m.Format(time.RFC1123),
 				"last_hr":     s.LastSyncHr.Format(time.RFC1123),
-				"total_syncs": s.SyncCount15m + s.SyncCountHr,
+				"last_curr":   s.LastSyncCurr.Format(time.RFC1123),
+				"total_syncs": s.SyncCount15m + s.SyncCountHr + s.SyncCountCurr,
 			}
 			s.mu.RUnlock()
 		}
@@ -285,8 +353,15 @@ func renderJSON(w http.ResponseWriter, data any) {
 	json.NewEncoder(w).Encode(data)
 }
 
+// --- API Response Types ---
+
 type WeatherResponse struct {
 	Temperature    []float32 `json:"temperature"`
 	ValidTimeLocal []string  `json:"validTimeLocal"`
 	ValidTimeUtc   []int64   `json:"validTimeUtc"`
+}
+
+type ObservationResponse struct {
+	Temperature  int   `json:"temperature"`
+	ValidTimeUtc int64 `json:"validTimeUtc"`
 }
