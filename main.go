@@ -13,10 +13,11 @@ import (
 
 // --- Configuration ---
 const (
-	Max15mSlots    = 124 // 31 hours
-	MaxHrSlots     = 72  // 72 hours
+	Max15mSlots    = 124 // 31 hours  @ 15-min intervals
+	MaxHrSlots     = 72  // 72 hours  @ 1-hour intervals
+	MaxObsSlots    = 96  // 8 hours   @ 5-min intervals
 	PollInterval   = 3 * time.Minute
-	MaxConcurrency = 4 // Gentle API limit
+	MaxConcurrency = 6 // 3 fetch types × locations
 	ListenAddr     = ":8080"
 )
 
@@ -29,7 +30,8 @@ type LocationStore struct {
 	ID            string
 	Buffer15m     [Max15mSlots]Slot
 	BufferHr      [MaxHrSlots]Slot
-	Current       Slot
+	BufferObs     [MaxObsSlots]Slot // observed temperature history
+	Current       Slot              // latest single observation
 	LastSync15m   time.Time
 	LastSyncHr    time.Time
 	LastSyncCurr  time.Time
@@ -42,6 +44,31 @@ type LocationStore struct {
 type WeatherRegistry struct {
 	Locations map[string]*LocationStore
 	ApiKey    string
+}
+
+// --- Timezone-robust local time parser ---
+// weather.com returns validTimeLocal with timezone offsets in two formats
+// depending on region:
+//   - "2026-03-21T12:30:00-0400"  (no colon — most locations)
+//   - "2026-03-21T12:30:00-04:00" (with colon — some regions e.g. Canada)
+//
+// time.Parse is strict, so we try both layouts. The offset is only needed
+// for correct UTC conversion — it never leaks into stored data.
+var localTimeLayouts = []string{
+	"2006-01-02T15:04:05-0700",  // no colon:   -0400
+	"2006-01-02T15:04:05-07:00", // with colon: -04:00
+}
+
+func parseLocalTime(s string) (time.Time, error) {
+	var t time.Time
+	var err error
+	for _, layout := range localTimeLayouts {
+		t, err = time.Parse(layout, s)
+		if err == nil {
+			return t, nil
+		}
+	}
+	return t, fmt.Errorf("parseLocalTime: cannot parse %q with any known layout", s)
 }
 
 // --- Logic Engine ---
@@ -59,11 +86,14 @@ func (r *WeatherRegistry) Update(id string, data WeatherResponse, is15m bool) {
 		return
 	}
 
+	skipped := 0
 	for i, temp := range data.Temperature {
 		var ts int64
 		if is15m {
-			t, err := time.Parse("2006-01-02T15:04:05-0700", data.ValidTimeLocal[i])
+			t, err := parseLocalTime(data.ValidTimeLocal[i])
 			if err != nil {
+				skipped++
+				log.Printf("⚠️  [%s] Skipping point %d: %v", id, i, err)
 				continue
 			}
 			ts = t.Unix()
@@ -82,11 +112,15 @@ func (r *WeatherRegistry) Update(id string, data WeatherResponse, is15m bool) {
 	if is15m {
 		store.LastSync15m = time.Now()
 		store.SyncCount15m++
+		if skipped > 0 {
+			log.Printf("⚠️  [%s] 15m: %d/%d points skipped (parse failure)", id, skipped, len(data.Temperature))
+		}
 	} else {
 		store.LastSyncHr = time.Now()
 		store.SyncCountHr++
 	}
-	log.Printf("✅ [%s] Updated %s (%d points)", id, map[bool]string{true: "15m", false: "Hr"}[is15m], len(data.Temperature))
+	log.Printf("✅ [%s] Updated %s (%d points)", id,
+		map[bool]string{true: "15m", false: "Hr"}[is15m], len(data.Temperature)-skipped)
 }
 
 func (r *WeatherRegistry) UpdateCurrent(id string, data ObservationResponse) {
@@ -97,13 +131,27 @@ func (r *WeatherRegistry) UpdateCurrent(id string, data ObservationResponse) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 
-	store.Current = Slot{
+	// Snap to nearest 5-min boundary — absorbs minor API delivery jitter
+	// so the ring buffer index is always stable and predictable
+	snapped := (data.ValidTimeUtc / 300) * 300
+
+	slot := Slot{
 		Temp:      float32(data.Temperature),
-		Timestamp: data.ValidTimeUtc,
+		Timestamp: snapped,
 	}
+
+	// Update latest single reading (used for the "now" marker)
+	store.Current = slot
+
+	// Write into observation history ring buffer
+	idx := (snapped / 300) % MaxObsSlots
+	store.BufferObs[idx] = slot
+
 	store.LastSyncCurr = time.Now()
 	store.SyncCountCurr++
-	log.Printf("✅ [%s] Updated current (%.1f°C @ %s)", id, float32(data.Temperature), time.Unix(data.ValidTimeUtc, 0).UTC().Format(time.RFC3339))
+	log.Printf("✅ [%s] Updated obs (%.1f°C @ %s)", id,
+		float32(data.Temperature),
+		time.Unix(snapped, 0).UTC().Format(time.RFC3339))
 }
 
 func (s *LocationStore) GetData(startTs, endTs int64) map[string]any {
@@ -120,14 +168,26 @@ func (s *LocationStore) GetData(startTs, endTs int64) map[string]any {
 		}
 	}
 
-	// Forecast points
+	// Observation history — walk 5-min slots within requested range
+	observed := []map[string]any{}
+	for t := (startTs / 300) * 300; t <= endTs; t += 300 {
+		idx := (t / 300) % MaxObsSlots
+		if s.BufferObs[idx].Timestamp == t {
+			observed = append(observed, map[string]any{
+				"t":       time.Unix(t, 0).UTC().Format(time.RFC3339),
+				"unix_ts": t,
+				"v":       s.BufferObs[idx].Temp,
+			})
+		}
+	}
+
+	// Forecast points — walk 15-min slots within requested range
 	forecast := []map[string]any{}
 	for t := (startTs / 900) * 900; t <= endTs; t += 900 {
 		entry := map[string]any{
 			"t":       time.Unix(t, 0).UTC().Format(time.RFC3339),
 			"unix_ts": t,
 		}
-
 		found := false
 
 		// 15m takes priority
@@ -157,60 +217,99 @@ func (s *LocationStore) GetData(startTs, endTs int64) map[string]any {
 
 	return map[string]any{
 		"current":  current,
+		"observed": observed,
 		"forecast": forecast,
 	}
 }
 
 // --- Background Sync ---
 
+// nextAligned returns duration to sleep until the next clock-aligned boundary.
+// e.g. with interval=5min: if now is 11:03, returns ~2min until 11:05.
+func nextAligned(interval time.Duration) time.Duration {
+	now := time.Now()
+	next := now.Truncate(interval).Add(interval)
+	return next.Sub(now)
+}
+
 func startPoller(reg *WeatherRegistry) {
 	sem := make(chan struct{}, MaxConcurrency)
-	ticker := time.NewTicker(PollInterval)
 
-	run := func() {
-		log.Println("🔄 Starting batch sync...")
+	runForecasts := func() {
+		log.Println("🔄 Forecast sync...")
 		var wg sync.WaitGroup
-
 		for id := range reg.Locations {
-			// 15m forecast
 			wg.Add(1)
 			go func(locID string) {
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
-				url := fmt.Sprintf("https://api.weather.com/v3/wx/forecast/fifteenminute?icaoCode=%s&units=m&language=en-US&apiKey=%s&format=json", locID, reg.ApiKey)
+				url := fmt.Sprintf(
+					"https://api.weather.com/v3/wx/forecast/fifteenminute?icaoCode=%s&units=m&language=en-US&apiKey=%s&format=json",
+					locID, reg.ApiKey)
 				fetchAndUpdate(reg, locID, url, true)
 			}(id)
 
-			// Hourly forecast
 			wg.Add(1)
 			go func(locID string) {
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
-				url := fmt.Sprintf("https://api.weather.com/v3/wx/forecast/hourly/2day?icaoCode=%s&units=m&language=en-US&apiKey=%s&format=json", locID, reg.ApiKey)
+				url := fmt.Sprintf(
+					"https://api.weather.com/v3/wx/forecast/hourly/2day?icaoCode=%s&units=m&language=en-US&apiKey=%s&format=json",
+					locID, reg.ApiKey)
 				fetchAndUpdate(reg, locID, url, false)
 			}(id)
+		}
+		wg.Wait()
+		log.Println("✨ Forecast sync done.")
+	}
 
-			// Current observation
+	runObservations := func() {
+		log.Println("🔄 Observation sync...")
+		var wg sync.WaitGroup
+		for id := range reg.Locations {
 			wg.Add(1)
 			go func(locID string) {
 				defer wg.Done()
 				sem <- struct{}{}
 				defer func() { <-sem }()
-				url := fmt.Sprintf("https://api.weather.com/v3/wx/observations/current?icaoCode=%s&units=m&language=en-US&apiKey=%s&format=json", locID, reg.ApiKey)
+				url := fmt.Sprintf(
+					"https://api.weather.com/v3/wx/observations/current?icaoCode=%s&units=m&language=en-US&apiKey=%s&format=json",
+					locID, reg.ApiKey)
 				fetchAndUpdateCurrent(reg, locID, url)
 			}(id)
 		}
-
 		wg.Wait()
-		log.Println("✨ Batch sync finished.")
+		log.Println("✨ Observation sync done.")
 	}
 
 	go func() {
-		run()
-		for range ticker.C {
-			run()
+		// Run both immediately on startup
+		runForecasts()
+		runObservations()
+
+		// Forecast ticker: every 3 minutes (simple, no alignment needed)
+		go func() {
+			ticker := time.NewTicker(PollInterval)
+			for range ticker.C {
+				runForecasts()
+			}
+		}()
+
+		// Observation ticker: clock-aligned to 5-minute marks (:00, :05, :10 ...)
+		// Sleep until next boundary, fire, then tick every 5 minutes exactly.
+		waitFor := nextAligned(5 * time.Minute)
+		log.Printf("⏱  Next observation sync in %s (at %s UTC)",
+			waitFor.Round(time.Second),
+			time.Now().Add(waitFor).UTC().Format("15:04:05"))
+
+		time.Sleep(waitFor)
+		runObservations()
+
+		obsTicker := time.NewTicker(5 * time.Minute)
+		for range obsTicker.C {
+			runObservations()
 		}
 	}()
 }
@@ -247,7 +346,7 @@ func fetchAndUpdate(reg *WeatherRegistry, id, url string, is15m bool) {
 func fetchAndUpdateCurrent(reg *WeatherRegistry, id, url string) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		log.Printf("❌ [%s] Current Request Error: %v", id, err)
+		log.Printf("❌ [%s] Obs Request Error: %v", id, err)
 		return
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -255,19 +354,19 @@ func fetchAndUpdateCurrent(reg *WeatherRegistry, id, url string) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("❌ [%s] Current Network Error: %v", id, err)
+		log.Printf("❌ [%s] Obs Network Error: %v", id, err)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("❌ [%s] Current API Error: Status %d", id, resp.StatusCode)
+		log.Printf("❌ [%s] Obs API Error: Status %d", id, resp.StatusCode)
 		return
 	}
 
 	var data ObservationResponse
 	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		log.Printf("❌ [%s] Current JSON Error: %v", id, err)
+		log.Printf("❌ [%s] Obs JSON Error: %v", id, err)
 		return
 	}
 	reg.UpdateCurrent(id, data)
@@ -321,10 +420,11 @@ func main() {
 		for id, s := range registry.Locations {
 			s.mu.RLock()
 			stats[id] = map[string]any{
-				"last_15m":    s.LastSync15m.Format(time.RFC1123),
-				"last_hr":     s.LastSyncHr.Format(time.RFC1123),
-				"last_curr":   s.LastSyncCurr.Format(time.RFC1123),
-				"total_syncs": s.SyncCount15m + s.SyncCountHr + s.SyncCountCurr,
+				"last_15m":      s.LastSync15m.Format(time.RFC1123),
+				"last_hr":       s.LastSyncHr.Format(time.RFC1123),
+				"last_obs":      s.LastSyncCurr.Format(time.RFC1123),
+				"total_syncs":   s.SyncCount15m + s.SyncCountHr + s.SyncCountCurr,
+				"obs_collected": s.SyncCountCurr,
 			}
 			s.mu.RUnlock()
 		}
@@ -353,19 +453,6 @@ func renderJSON(w http.ResponseWriter, data any) {
 	json.NewEncoder(w).Encode(data)
 }
 
-// --- API Response Types ---
-
-type WeatherResponse struct {
-	Temperature    []float32 `json:"temperature"`
-	ValidTimeLocal []string  `json:"validTimeLocal"`
-	ValidTimeUtc   []int64   `json:"validTimeUtc"`
-}
-
-type ObservationResponse struct {
-	Temperature  int   `json:"temperature"`
-	ValidTimeUtc int64 `json:"validTimeUtc"`
-}
-
 func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -377,4 +464,17 @@ func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+// --- API Response Types ---
+
+type WeatherResponse struct {
+	Temperature    []float32 `json:"temperature"`
+	ValidTimeLocal []string  `json:"validTimeLocal"`
+	ValidTimeUtc   []int64   `json:"validTimeUtc"`
+}
+
+type ObservationResponse struct {
+	Temperature  int   `json:"temperature"`
+	ValidTimeUtc int64 `json:"validTimeUtc"`
 }
