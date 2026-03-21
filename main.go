@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -15,9 +16,10 @@ import (
 const (
 	Max15mSlots    = 124 // 31 hours  @ 15-min intervals
 	MaxHrSlots     = 72  // 72 hours  @ 1-hour intervals
-	MaxObsSlots    = 96  // 8 hours   @ 5-min intervals
+	MaxObsSlots    = 96  // holds ~16h of observations at ~10-min station cadence
+	ObsDupWindow   = 60  // seconds — timestamps within this window are duplicates
 	PollInterval   = 3 * time.Minute
-	MaxConcurrency = 6 // 3 fetch types × locations
+	MaxConcurrency = 6
 	ListenAddr     = ":8080"
 )
 
@@ -30,8 +32,9 @@ type LocationStore struct {
 	ID            string
 	Buffer15m     [Max15mSlots]Slot
 	BufferHr      [MaxHrSlots]Slot
-	BufferObs     [MaxObsSlots]Slot // observed temperature history
-	Current       Slot              // latest single observation
+	BufferObs     [MaxObsSlots]Slot // observation history, written by monotonic counter
+	ObsWriteIdx   int               // next slot to write; wraps at MaxObsSlots
+	Current       Slot              // latest observation for the "now" marker
 	LastSync15m   time.Time
 	LastSyncHr    time.Time
 	LastSyncCurr  time.Time
@@ -69,6 +72,13 @@ func parseLocalTime(s string) (time.Time, error) {
 		}
 	}
 	return t, fmt.Errorf("parseLocalTime: cannot parse %q with any known layout", s)
+}
+
+func abs64(x int64) int64 {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 // --- Logic Engine ---
@@ -131,26 +141,39 @@ func (r *WeatherRegistry) UpdateCurrent(id string, data ObservationResponse) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 
-	// Use the real station measurement timestamp throughout.
-	// Stations report at irregular offsets within the hour (e.g. CYYZ reports
-	// at :15/:25/:35) — this is honest data and charting libraries handle
-	// sparse time-series natively. Storing at a fake grid time would place
-	// the observed point at a time we have no measurement for.
-	slot := Slot{
-		Temp:      float32(data.Temperature),
-		Timestamp: data.ValidTimeUtc,
+	incoming := data.ValidTimeUtc
+
+	// Deduplicate: if the incoming timestamp is within ObsDupWindow seconds
+	// of the last stored observation, the station hasn't reported a new
+	// measurement yet — just update Current in place and skip the buffer write.
+	// The threshold absorbs API timestamp jitter (e.g. :57:07 vs :57:09 for
+	// the same physical reading) while correctly detecting new measurements.
+	if store.Current.Timestamp > 0 && abs64(incoming-store.Current.Timestamp) < ObsDupWindow {
+		// Same measurement, just refresh Current
+		store.Current = Slot{Temp: float32(data.Temperature), Timestamp: incoming}
+		log.Printf("⏭  [%s] Obs duplicate skipped (Δ%ds)", id, abs64(incoming-store.Current.Timestamp))
+		return
 	}
 
+	slot := Slot{
+		Temp:      float32(data.Temperature),
+		Timestamp: incoming,
+	}
+
+	// Update the "now" marker
 	store.Current = slot
 
-	idx := (data.ValidTimeUtc / 300) % MaxObsSlots
-	store.BufferObs[idx] = slot
+	// Write into ring buffer using monotonic write counter — no timestamp-
+	// derived indexing. Oldest entry is naturally overwritten when the
+	// counter wraps after MaxObsSlots observations.
+	store.BufferObs[store.ObsWriteIdx] = slot
+	store.ObsWriteIdx = (store.ObsWriteIdx + 1) % MaxObsSlots
 
 	store.LastSyncCurr = time.Now()
 	store.SyncCountCurr++
-	log.Printf("\u2705 [%s] Updated obs (%.1f\u00b0C @ %s)", id,
+	log.Printf("✅ [%s] Updated obs (%.1f°C @ %s)", id,
 		float32(data.Temperature),
-		time.Unix(data.ValidTimeUtc, 0).UTC().Format(time.RFC3339))
+		time.Unix(incoming, 0).UTC().Format(time.RFC3339))
 }
 
 func (s *LocationStore) GetData(startTs, endTs int64) map[string]any {
@@ -167,18 +190,22 @@ func (s *LocationStore) GetData(startTs, endTs int64) map[string]any {
 		}
 	}
 
-	// Observation history — walk 5-min slots within requested range
+	// Observation history — scan all slots, collect those in range, sort.
+	// No grid assumption: station timestamps are irregular and stored as-is.
 	observed := []map[string]any{}
-	for t := (startTs / 300) * 300; t <= endTs; t += 300 {
-		idx := (t / 300) % MaxObsSlots
-		if s.BufferObs[idx].Timestamp == t {
+	for i := 0; i < MaxObsSlots; i++ {
+		slot := s.BufferObs[i]
+		if slot.Timestamp > 0 && slot.Timestamp >= startTs && slot.Timestamp <= endTs {
 			observed = append(observed, map[string]any{
-				"t":       time.Unix(t, 0).UTC().Format(time.RFC3339),
-				"unix_ts": t,
-				"v":       s.BufferObs[idx].Temp,
+				"t":       time.Unix(slot.Timestamp, 0).UTC().Format(time.RFC3339),
+				"unix_ts": slot.Timestamp,
+				"v":       slot.Temp,
 			})
 		}
 	}
+	sort.Slice(observed, func(i, j int) bool {
+		return observed[i]["unix_ts"].(int64) < observed[j]["unix_ts"].(int64)
+	})
 
 	// Forecast points — walk 15-min slots within requested range
 	forecast := []map[string]any{}
@@ -280,7 +307,7 @@ func startPoller(reg *WeatherRegistry) {
 		runForecasts()
 		runObservations()
 
-		// Forecast ticker: simple 3-minute interval, no alignment needed
+		// Forecast ticker: every 3 minutes
 		go func() {
 			ticker := time.NewTicker(PollInterval)
 			for range ticker.C {
@@ -289,20 +316,13 @@ func startPoller(reg *WeatherRegistry) {
 		}()
 
 		// Observation ticker: wall-clock driven, fires at :00/:05/:10.../:55
-		//
-		// Rather than Sleep+Ticker (which drifts) we check a coarse 30-second
-		// ticker against the actual wall clock. When the current time falls
-		// within 30 seconds after a 5-minute boundary AND we haven't already
-		// fired for that boundary, we run. This is self-correcting by design —
-		// restarts, slow networks, or long runs cannot cause drift or skips.
+		// Checks every 30s whether we've crossed a 5-min boundary. Self-
+		// correcting — no drift possible regardless of how long a run takes.
 		go func() {
 			ticker := time.NewTicker(30 * time.Second)
 			var lastFired time.Time
 			for tick := range ticker.C {
 				boundary := tick.Truncate(5 * time.Minute)
-				// Fire if:
-				// 1. We are within 30s after a 5-min boundary (not before it)
-				// 2. We haven't already fired for this boundary
 				if tick.Sub(boundary) < 30*time.Second && boundary.After(lastFired) {
 					lastFired = boundary
 					log.Printf("⏱  Observation tick at boundary %s UTC",
