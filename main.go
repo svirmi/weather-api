@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -15,9 +16,10 @@ import (
 const (
 	Max15mSlots    = 124 // 31 hours  @ 15-min intervals
 	MaxHrSlots     = 72  // 72 hours  @ 1-hour intervals
-	MaxObsSlots    = 96  // 8 hours   @ 5-min intervals
+	MaxObsSlots    = 96  // holds ~16h of observations at ~10-min station cadence
+	ObsDupWindow   = 60  // seconds — timestamps within this window are duplicates
 	PollInterval   = 3 * time.Minute
-	MaxConcurrency = 6 // 3 fetch types × locations
+	MaxConcurrency = 6
 	ListenAddr     = ":8080"
 )
 
@@ -30,8 +32,9 @@ type LocationStore struct {
 	ID            string
 	Buffer15m     [Max15mSlots]Slot
 	BufferHr      [MaxHrSlots]Slot
-	BufferObs     [MaxObsSlots]Slot // observed temperature history
-	Current       Slot              // latest single observation
+	BufferObs     [MaxObsSlots]Slot // observation history, written by monotonic counter
+	ObsWriteIdx   int               // next slot to write; wraps at MaxObsSlots
+	Current       Slot              // latest observation for the "now" marker
 	LastSync15m   time.Time
 	LastSyncHr    time.Time
 	LastSyncCurr  time.Time
@@ -69,6 +72,13 @@ func parseLocalTime(s string) (time.Time, error) {
 		}
 	}
 	return t, fmt.Errorf("parseLocalTime: cannot parse %q with any known layout", s)
+}
+
+func abs64(x int64) int64 {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 // --- Logic Engine ---
@@ -131,27 +141,39 @@ func (r *WeatherRegistry) UpdateCurrent(id string, data ObservationResponse) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
 
-	// Snap to nearest 5-min boundary — absorbs minor API delivery jitter
-	// so the ring buffer index is always stable and predictable
-	snapped := (data.ValidTimeUtc / 300) * 300
+	incoming := data.ValidTimeUtc
+
+	// Deduplicate: if the incoming timestamp is within ObsDupWindow seconds
+	// of the last stored observation, the station hasn't reported a new
+	// measurement yet — just update Current in place and skip the buffer write.
+	// The threshold absorbs API timestamp jitter (e.g. :57:07 vs :57:09 for
+	// the same physical reading) while correctly detecting new measurements.
+	if store.Current.Timestamp > 0 && abs64(incoming-store.Current.Timestamp) < ObsDupWindow {
+		// Same measurement, just refresh Current
+		store.Current = Slot{Temp: float32(data.Temperature), Timestamp: incoming}
+		log.Printf("⏭  [%s] Obs duplicate skipped (Δ%ds)", id, abs64(incoming-store.Current.Timestamp))
+		return
+	}
 
 	slot := Slot{
 		Temp:      float32(data.Temperature),
-		Timestamp: snapped,
+		Timestamp: incoming,
 	}
 
-	// Update latest single reading (used for the "now" marker)
+	// Update the "now" marker
 	store.Current = slot
 
-	// Write into observation history ring buffer
-	idx := (snapped / 300) % MaxObsSlots
-	store.BufferObs[idx] = slot
+	// Write into ring buffer using monotonic write counter — no timestamp-
+	// derived indexing. Oldest entry is naturally overwritten when the
+	// counter wraps after MaxObsSlots observations.
+	store.BufferObs[store.ObsWriteIdx] = slot
+	store.ObsWriteIdx = (store.ObsWriteIdx + 1) % MaxObsSlots
 
 	store.LastSyncCurr = time.Now()
 	store.SyncCountCurr++
 	log.Printf("✅ [%s] Updated obs (%.1f°C @ %s)", id,
 		float32(data.Temperature),
-		time.Unix(snapped, 0).UTC().Format(time.RFC3339))
+		time.Unix(incoming, 0).UTC().Format(time.RFC3339))
 }
 
 func (s *LocationStore) GetData(startTs, endTs int64) map[string]any {
@@ -168,18 +190,22 @@ func (s *LocationStore) GetData(startTs, endTs int64) map[string]any {
 		}
 	}
 
-	// Observation history — walk 5-min slots within requested range
+	// Observation history — scan all slots, collect those in range, sort.
+	// No grid assumption: station timestamps are irregular and stored as-is.
 	observed := []map[string]any{}
-	for t := (startTs / 300) * 300; t <= endTs; t += 300 {
-		idx := (t / 300) % MaxObsSlots
-		if s.BufferObs[idx].Timestamp == t {
+	for i := 0; i < MaxObsSlots; i++ {
+		slot := s.BufferObs[i]
+		if slot.Timestamp > 0 && slot.Timestamp >= startTs && slot.Timestamp <= endTs {
 			observed = append(observed, map[string]any{
-				"t":       time.Unix(t, 0).UTC().Format(time.RFC3339),
-				"unix_ts": t,
-				"v":       s.BufferObs[idx].Temp,
+				"t":       time.Unix(slot.Timestamp, 0).UTC().Format(time.RFC3339),
+				"unix_ts": slot.Timestamp,
+				"v":       slot.Temp,
 			})
 		}
 	}
+	sort.Slice(observed, func(i, j int) bool {
+		return observed[i]["unix_ts"].(int64) < observed[j]["unix_ts"].(int64)
+	})
 
 	// Forecast points — walk 15-min slots within requested range
 	forecast := []map[string]any{}
@@ -223,14 +249,6 @@ func (s *LocationStore) GetData(startTs, endTs int64) map[string]any {
 }
 
 // --- Background Sync ---
-
-// nextAligned returns duration to sleep until the next clock-aligned boundary.
-// e.g. with interval=5min: if now is 11:03, returns ~2min until 11:05.
-func nextAligned(interval time.Duration) time.Duration {
-	now := time.Now()
-	next := now.Truncate(interval).Add(interval)
-	return next.Sub(now)
-}
 
 func startPoller(reg *WeatherRegistry) {
 	sem := make(chan struct{}, MaxConcurrency)
@@ -289,7 +307,7 @@ func startPoller(reg *WeatherRegistry) {
 		runForecasts()
 		runObservations()
 
-		// Forecast ticker: every 3 minutes (simple, no alignment needed)
+		// Forecast ticker: every 3 minutes
 		go func() {
 			ticker := time.NewTicker(PollInterval)
 			for range ticker.C {
@@ -297,20 +315,22 @@ func startPoller(reg *WeatherRegistry) {
 			}
 		}()
 
-		// Observation ticker: clock-aligned to 5-minute marks (:00, :05, :10 ...)
-		// Sleep until next boundary, fire, then tick every 5 minutes exactly.
-		waitFor := nextAligned(5 * time.Minute)
-		log.Printf("⏱  Next observation sync in %s (at %s UTC)",
-			waitFor.Round(time.Second),
-			time.Now().Add(waitFor).UTC().Format("15:04:05"))
-
-		time.Sleep(waitFor)
-		runObservations()
-
-		obsTicker := time.NewTicker(5 * time.Minute)
-		for range obsTicker.C {
-			runObservations()
-		}
+		// Observation ticker: wall-clock driven, fires at :00/:05/:10.../:55
+		// Checks every 30s whether we've crossed a 5-min boundary. Self-
+		// correcting — no drift possible regardless of how long a run takes.
+		go func() {
+			ticker := time.NewTicker(30 * time.Second)
+			var lastFired time.Time
+			for tick := range ticker.C {
+				boundary := tick.Truncate(5 * time.Minute)
+				if tick.Sub(boundary) < 30*time.Second && boundary.After(lastFired) {
+					lastFired = boundary
+					log.Printf("⏱  Observation tick at boundary %s UTC",
+						boundary.UTC().Format("15:04:05"))
+					runObservations()
+				}
+			}
+		}()
 	}()
 }
 
