@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Temp Monitor</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg0: #060910;
+  --bg1: rgba(255,255,255,0.03);
+  --bg2: rgba(255,255,255,0.06);
+  --bg3: rgba(255,255,255,0.10);
+  --border: rgba(255,255,255,0.08);
+  --border-hi: rgba(255,255,255,0.18);
+  --txt: rgba(220,232,255,0.92);
+  --txt2: rgba(160,185,230,0.6);
+  --txt3: rgba(100,130,180,0.45);
+  --cyan: #2de8ff;
+  --cyan2: rgba(45,232,255,0.15);
+  --orange: #ffaa44;
+  --orange2: rgba(255,170,68,0.15);
+  --green: #44ffb0;
+}
+
+html, body { width:100%; height:100%; overflow:hidden; }
+
+body {
+  font-family: 'Syne', sans-serif;
+  color: var(--txt);
+  background:
+    radial-gradient(ellipse 90% 70% at 15% 5%,  rgba(20,50,200,0.3) 0%, transparent 55%),
+    radial-gradient(ellipse 70% 60% at 85% 85%, rgba(80,10,140,0.28) 0%, transparent 55%),
+    radial-gradient(ellipse 50% 40% at 55% 30%,  rgba(0,80,160,0.15) 0%, transparent 50%),
+    var(--bg0);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+}
+
+.shell {
+  width: 960px;
+  height: 580px;
+  display: flex;
+  border-radius: 22px;
+  overflow: hidden;
+  background: rgba(8,13,32,0.55);
+  border: 1px solid var(--border);
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.03),
+    0 40px 100px rgba(0,0,0,0.65),
+    inset 0 1px 0 rgba(255,255,255,0.06);
+  backdrop-filter: blur(40px) saturate(1.4);
+}
+
+/* ── SIDEBAR ─────────────────────────────── */
+.sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  background: rgba(5,9,24,0.4);
+}
+
+.sidebar-head {
+  padding: 20px 16px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--txt3);
+}
+
+.pulse-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 8px var(--green);
+  animation: pulse 2.2s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%,100% { opacity:1; transform:scale(1); }
+  50%      { opacity:0.4; transform:scale(0.7); }
+}
+
+.airport-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 10px;
+  scrollbar-width: none;
+}
+.airport-list::-webkit-scrollbar { display:none; }
+
+.ap-card {
+  border-radius: 11px;
+  padding: 10px 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 3px;
+  transition: background 0.18s, border-color 0.18s;
+  border: 1px solid transparent;
+}
+.ap-card:hover { background: var(--bg2); border-color: var(--border); }
+.ap-card.active {
+  background: rgba(45,232,255,0.07);
+  border-color: rgba(45,232,255,0.25);
+}
+
+.ap-left {}
+.ap-code {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--txt);
+  letter-spacing: 0.04em;
+}
+.ap-card.active .ap-code { color: var(--cyan); }
+.ap-city {
+  font-size: 10.5px;
+  color: var(--txt3);
+  margin-top: 1px;
+}
+
+.ap-right { text-align: right; }
+.ap-temp {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--txt);
+}
+.ap-trend {
+  font-size: 10px;
+  color: var(--txt3);
+  margin-top: 1px;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.sidebar-footer {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  font-size: 10px;
+  color: var(--txt3);
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.04em;
+}
+
+/* ── MAIN ─────────────────────────────── */
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* HEADER */
+.main-head {
+  padding: 20px 24px 16px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.city-block {}
+.city-name {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--txt);
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+.city-sub {
+  font-size: 11px;
+  color: var(--txt3);
+  font-family: 'JetBrains Mono', monospace;
+  margin-top: 5px;
+  letter-spacing: 0.04em;
+}
+.city-sub span {
+  color: var(--cyan);
+  font-weight: 500;
+}
+
+.temp-block {
+  text-align: right;
+}
+.temp-now {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 58px;
+  font-weight: 300;
+  color: var(--txt);
+  line-height: 1;
+  letter-spacing: -0.04em;
+}
+.temp-unit { font-size: 28px; color: var(--txt2); }
+.temp-range {
+  font-size: 11px;
+  color: var(--txt3);
+  font-family: 'JetBrains Mono', monospace;
+  margin-top: 4px;
+  letter-spacing: 0.03em;
+}
+
+/* TABS */
+.tabs {
+  display: flex;
+  background: rgba(4,7,20,0.3);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.tab {
+  flex: 1;
+  padding: 9px 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--txt3);
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  font-family: 'Syne', sans-serif;
+  letter-spacing: 0.02em;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+  position: relative;
+}
+.tab:hover { color: var(--txt2); }
+.tab.active {
+  color: var(--cyan);
+  border-bottom-color: var(--cyan);
+  background: rgba(45,232,255,0.04);
+}
+
+/* CHART AREA */
+.chart-zone {
+  flex: 1;
+  padding: 14px 20px 4px;
+  position: relative;
+  min-height: 0;
+}
+.chart-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+/* NOW LINE marker */
+.now-badge {
+  position: absolute;
+  top: -2px;
+  background: var(--cyan);
+  color: #030810;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  font-weight: 500;
+  padding: 2px 5px;
+  border-radius: 4px;
+  transform: translateX(-50%);
+  pointer-events: none;
+  white-space: nowrap;
+  letter-spacing: 0.04em;
+}
+
+/* NUMERIC TEMP STRIP */
+.tstrip {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  background: rgba(4,7,20,0.35);
+  position: relative;
+  height: 72px;
+}
+.tstrip-inner {
+  display: flex;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 0 36px;
+  height: 100%;
+  align-items: center;
+  gap: 0;
+}
+.tstrip-inner::-webkit-scrollbar { display:none; }
+
+.t-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 6px;
+  border-radius: 9px;
+  flex-shrink: 0;
+  min-width: 52px;
+  border: 1px solid transparent;
+  position: relative;
+}
+.t-item.obs  { }
+.t-item.now  {
+  background: rgba(45,232,255,0.08);
+  border-color: rgba(45,232,255,0.3);
+}
+.t-item.fc   { }
+
+.t-time {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9.5px;
+  color: var(--txt3);
+  letter-spacing: 0.02em;
+}
+.t-item.now .t-time { color: var(--cyan); font-weight: 500; }
+
+.t-val {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+}
+.t-item.obs  .t-val { color: #ffaa44; }
+.t-item.now  .t-val { color: var(--cyan); font-size: 15px; }
+.t-item.fc   .t-val { color: rgba(160,190,230,0.7); }
+
+.t-kind {
+  font-size: 8.5px;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.t-item.obs  .t-kind { color: rgba(255,170,68,0.45); }
+.t-item.now  .t-kind { color: rgba(45,232,255,0.6); }
+.t-item.fc   .t-kind { color: var(--txt3); }
+
+.tstrip-arrow {
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  color: var(--txt2);
+  cursor: pointer;
+  z-index: 2;
+}
+.tstrip-arrow.left  { left:0;  background: linear-gradient(to right, rgba(4,7,20,0.92) 60%, transparent); }
+.tstrip-arrow.right { right:0; background: linear-gradient(to left,  rgba(4,7,20,0.92) 60%, transparent); }
+
+/* LEGEND */
+.legend-row {
+  display: flex;
+  gap: 16px;
+  padding: 0 20px 9px;
+  flex-shrink: 0;
+}
+.leg {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--txt3);
+}
+.leg-line {
+  width: 18px; height: 2px;
+  border-radius: 1px;
+}
+.leg-dash {
+  width: 18px; height: 0;
+  border-top: 1.5px dashed rgba(140,160,200,0.35);
+}
+</style>
+</head>
+<body>
+
+<div class="shell">
+  <aside class="sidebar">
+    <div class="sidebar-head">
+      <span class="sidebar-label">Live Stations</span>
+      <div class="pulse-dot"></div>
+    </div>
+    <div class="airport-list" id="apList"></div>
+    <div class="sidebar-footer" id="nowTs">—</div>
+  </aside>
+
+  <main class="main">
+    <div class="main-head">
+      <div class="city-block">
+        <div class="city-name" id="cityName">—</div>
+        <div class="city-sub" id="citySub">—</div>
+      </div>
+      <div class="temp-block">
+        <div class="temp-now" id="tempNow">—<span class="temp-unit">°C</span></div>
+        <div class="temp-range" id="tempRange">—</div>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab active" onclick="setTab(0,this)">Forecast · ±12h</button>
+      <button class="tab" onclick="setTab(1,this)">Extended · 3d</button>
+    </div>
+
+    <div class="chart-zone">
+      <div class="chart-wrap">
+        <canvas id="ch"></canvas>
+      </div>
+    </div>
+
+    <div class="legend-row">
+      <div class="leg"><div class="leg-line" style="background:#2de8ff"></div> Forecast</div>
+      <div class="leg"><div class="leg-line" style="background:#ffaa44"></div> Observed</div>
+    </div>
+
+    <div class="tstrip">
+      <div class="tstrip-arrow left"  onclick="scrollT(-1)">‹</div>
+      <div class="tstrip-inner" id="tStrip"></div>
+      <div class="tstrip-arrow right" onclick="scrollT(1)">›</div>
+    </div>
+  </main>
+</div>
+
+<script>
+const AIRPORT_META = {
+  CYYZ: { city: 'Toronto',  tz: 'America/Toronto' },
+  EGLC: { city: 'London',   tz: 'Europe/London' },
+  EPWA: { city: 'Warsaw',   tz: 'Europe/Warsaw' },
+  LFPG: { city: 'Paris',    tz: 'Europe/Paris' },
+  LLBG: { city: 'Tel Aviv', tz: 'Asia/Jerusalem' },
+  LTAC: { city: 'Ankara',   tz: 'Europe/Istanbul' },
+  RJTT: { city: 'Tokyo',    tz: 'Asia/Tokyo' },
+};
+
+const RAW = {"CYYZ":{"current":{"t":"2026-03-23T09:51:13Z","unix_ts":1774259473,"v":0},"forecast":[{"res":"15m","t":"2026-03-22T10:00:00Z","unix_ts":1774173600,"v":1},{"res":"15m","t":"2026-03-22T10:15:00Z","unix_ts":1774174500,"v":1},{"res":"15m","t":"2026-03-22T10:30:00Z","unix_ts":1774175400,"v":1},{"res":"15m","t":"2026-03-22T10:45:00Z","unix_ts":1774176300,"v":1},{"res":"15m","t":"2026-03-22T11:00:00Z","unix_ts":1774177200,"v":2},{"res":"15m","t":"2026-03-22T11:15:00Z","unix_ts":1774178100,"v":2},{"res":"15m","t":"2026-03-22T11:30:00Z","unix_ts":1774179000,"v":2},{"res":"15m","t":"2026-03-22T11:45:00Z","unix_ts":1774179900,"v":2},{"res":"15m","t":"2026-03-22T12:00:00Z","unix_ts":1774180800,"v":2},{"res":"15m","t":"2026-03-22T12:15:00Z","unix_ts":1774181700,"v":2},{"res":"15m","t":"2026-03-22T12:30:00Z","unix_ts":1774182600,"v":2},{"res":"15m","t":"2026-03-22T12:45:00Z","unix_ts":1774183500,"v":3},{"res":"15m","t":"2026-03-22T13:00:00Z","unix_ts":1774184400,"v":3},{"res":"15m","t":"2026-03-22T13:15:00Z","unix_ts":1774185300,"v":2},{"res":"15m","t":"2026-03-22T13:30:00Z","unix_ts":1774186200,"v":3},{"res":"15m","t":"2026-03-22T13:45:00Z","unix_ts":1774187100,"v":3},{"res":"15m","t":"2026-03-22T14:00:00Z","unix_ts":1774188000,"v":3},{"res":"15m","t":"2026-03-22T14:15:00Z","unix_ts":1774188900,"v":2},{"res":"15m","t":"2026-03-22T14:30:00Z","unix_ts":1774189800,"v":3},{"res":"15m","t":"2026-03-22T14:45:00Z","unix_ts":1774190700,"v":3},{"res":"15m","t":"2026-03-22T15:00:00Z","unix_ts":1774191600,"v":3},{"res":"15m","t":"2026-03-22T15:15:00Z","unix_ts":1774192500,"v":3},{"res":"15m","t":"2026-03-22T15:30:00Z","unix_ts":1774193400,"v":3},{"res":"15m","t":"2026-03-22T15:45:00Z","unix_ts":1774194300,"v":4},{"res":"15m","t":"2026-03-22T16:00:00Z","unix_ts":1774195200,"v":4},{"res":"15m","t":"2026-03-22T16:15:00Z","unix_ts":1774196100,"v":3},{"res":"15m","t":"2026-03-22T16:30:00Z","unix_ts":1774197000,"v":4},{"res":"15m","t":"2026-03-22T16:45:00Z","unix_ts":1774197900,"v":5},{"res":"15m","t":"2026-03-22T17:00:00Z","unix_ts":1774198800,"v":4},{"res":"15m","t":"2026-03-22T17:15:00Z","unix_ts":1774199700,"v":4},{"res":"15m","t":"2026-03-22T17:30:00Z","unix_ts":1774200600,"v":4},{"res":"15m","t":"2026-03-22T17:45:00Z","unix_ts":1774201500,"v":4},{"res":"15m","t":"2026-03-22T18:00:00Z","unix_ts":1774202400,"v":5},{"res":"15m","t":"2026-03-22T18:15:00Z","unix_ts":1774203300,"v":5},{"res":"15m","t":"2026-03-22T18:30:00Z","unix_ts":1774204200,"v":5},{"res":"15m","t":"2026-03-22T18:45:00Z","unix_ts":1774205100,"v":5},{"res":"15m","t":"2026-03-22T19:00:00Z","unix_ts":1774206000,"v":5},{"res":"15m","t":"2026-03-22T19:15:00Z","unix_ts":1774206900,"v":5},{"res":"15m","t":"2026-03-22T19:30:00Z","unix_ts":1774207800,"v":5},{"res":"15m","t":"2026-03-22T19:45:00Z","unix_ts":1774208700,"v":5},{"res":"15m","t":"2026-03-22T20:00:00Z","unix_ts":1774209600,"v":5},{"res":"15m","t":"2026-03-22T20:15:00Z","unix_ts":1774210500,"v":5},{"res":"15m","t":"2026-03-22T20:30:00Z","unix_ts":1774211400,"v":5},{"res":"15m","t":"2026-03-22T20:45:00Z","unix_ts":1774212300,"v":5},{"res":"15m","t":"2026-03-22T21:00:00Z","unix_ts":1774213200,"v":5},{"res":"15m","t":"2026-03-22T21:15:00Z","unix_ts":1774214100,"v":4},{"res":"15m","t":"2026-03-22T21:30:00Z","unix_ts":1774215000,"v":4},{"res":"15m","t":"2026-03-22T21:45:00Z","unix_ts":1774215900,"v":4},{"res":"15m","t":"2026-03-22T22:00:00Z","unix_ts":1774216800,"v":4},{"res":"15m","t":"2026-03-22T22:15:00Z","unix_ts":1774217700,"v":4},{"res":"15m","t":"2026-03-22T22:30:00Z","unix_ts":1774218600,"v":4},{"res":"15m","t":"2026-03-22T22:45:00Z","unix_ts":1774219500,"v":4},{"res":"15m","t":"2026-03-22T23:00:00Z","unix_ts":1774220400,"v":3},{"res":"15m","t":"2026-03-22T23:15:00Z","unix_ts":1774221300,"v":4},{"res":"15m","t":"2026-03-22T23:30:00Z","unix_ts":1774222200,"v":4},{"res":"15m","t":"2026-03-22T23:45:00Z","unix_ts":1774223100,"v":4},{"res":"15m","t":"2026-03-23T00:00:00Z","unix_ts":1774224000,"v":3},{"res":"15m","t":"2026-03-23T00:15:00Z","unix_ts":1774224900,"v":3},{"res":"15m","t":"2026-03-23T00:30:00Z","unix_ts":1774225800,"v":3},{"res":"15m","t":"2026-03-23T00:45:00Z","unix_ts":1774226700,"v":3},{"res":"15m","t":"2026-03-23T01:00:00Z","unix_ts":1774227600,"v":3},{"res":"15m","t":"2026-03-23T01:15:00Z","unix_ts":1774228500,"v":3},{"res":"15m","t":"2026-03-23T01:30:00Z","unix_ts":1774229400,"v":3},{"res":"15m","t":"2026-03-23T01:45:00Z","unix_ts":1774230300,"v":3},{"res":"15m","t":"2026-03-23T02:00:00Z","unix_ts":1774231200,"v":3},{"res":"15m","t":"2026-03-23T02:15:00Z","unix_ts":1774232100,"v":3},{"res":"15m","t":"2026-03-23T02:30:00Z","unix_ts":1774233000,"v":3},{"res":"15m","t":"2026-03-23T02:45:00Z","unix_ts":1774233900,"v":2},{"res":"15m","t":"2026-03-23T03:00:00Z","unix_ts":1774234800,"v":2},{"res":"15m","t":"2026-03-23T03:15:00Z","unix_ts":1774235700,"v":3},{"res":"15m","t":"2026-03-23T03:30:00Z","unix_ts":1774236600,"v":3},{"res":"15m","t":"2026-03-23T03:45:00Z","unix_ts":1774237500,"v":3},{"res":"15m","t":"2026-03-23T04:00:00Z","unix_ts":1774238400,"v":2},{"res":"15m","t":"2026-03-23T04:15:00Z","unix_ts":1774239300,"v":2},{"res":"15m","t":"2026-03-23T04:30:00Z","unix_ts":1774240200,"v":2},{"res":"15m","t":"2026-03-23T04:45:00Z","unix_ts":1774241100,"v":2},{"res":"15m","t":"2026-03-23T05:00:00Z","unix_ts":1774242000,"v":1},{"res":"15m","t":"2026-03-23T05:15:00Z","unix_ts":1774242900,"v":1},{"res":"15m","t":"2026-03-23T05:30:00Z","unix_ts":1774243800,"v":1},{"res":"15m","t":"2026-03-23T05:45:00Z","unix_ts":1774244700,"v":1},{"res":"15m","t":"2026-03-23T06:00:00Z","unix_ts":1774245600,"v":1},{"res":"15m","t":"2026-03-23T06:15:00Z","unix_ts":1774246500,"v":1},{"res":"15m","t":"2026-03-23T06:30:00Z","unix_ts":1774247400,"v":1},{"res":"15m","t":"2026-03-23T06:45:00Z","unix_ts":1774248300,"v":1},{"res":"15m","t":"2026-03-23T07:00:00Z","unix_ts":1774249200,"v":1},{"res":"15m","t":"2026-03-23T07:15:00Z","unix_ts":1774250100,"v":1},{"res":"15m","t":"2026-03-23T07:30:00Z","unix_ts":1774251000,"v":1},{"res":"15m","t":"2026-03-23T07:45:00Z","unix_ts":1774251900,"v":1},{"res":"15m","t":"2026-03-23T08:00:00Z","unix_ts":1774252800,"v":0},{"res":"15m","t":"2026-03-23T08:15:00Z","unix_ts":1774253700,"v":1},{"res":"15m","t":"2026-03-23T08:30:00Z","unix_ts":1774254600,"v":1},{"res":"15m","t":"2026-03-23T08:45:00Z","unix_ts":1774255500,"v":1},{"res":"15m","t":"2026-03-23T09:00:00Z","unix_ts":1774256400,"v":1},{"res":"15m","t":"2026-03-23T09:15:00Z","unix_ts":1774257300,"v":0},{"res":"15m","t":"2026-03-23T09:30:00Z","unix_ts":1774258200,"v":0},{"res":"15m","t":"2026-03-23T09:45:00Z","unix_ts":1774259100,"v":0},{"res":"15m","t":"2026-03-23T10:00:00Z","unix_ts":1774260000,"v":0},{"res":"15m","t":"2026-03-23T10:15:00Z","unix_ts":1774260900,"v":0},{"res":"15m","t":"2026-03-23T10:30:00Z","unix_ts":1774261800,"v":0},{"res":"15m","t":"2026-03-23T10:45:00Z","unix_ts":1774262700,"v":0},{"res":"15m","t":"2026-03-23T11:00:00Z","unix_ts":1774263600,"v":0},{"res":"15m","t":"2026-03-23T11:15:00Z","unix_ts":1774264500,"v":0},{"res":"15m","t":"2026-03-23T11:30:00Z","unix_ts":1774265400,"v":0},{"res":"15m","t":"2026-03-23T11:45:00Z","unix_ts":1774266300,"v":0},{"res":"15m","t":"2026-03-23T12:00:00Z","unix_ts":1774267200,"v":0},{"res":"15m","t":"2026-03-23T12:15:00Z","unix_ts":1774268100,"v":0},{"res":"15m","t":"2026-03-23T12:30:00Z","unix_ts":1774269000,"v":0},{"res":"15m","t":"2026-03-23T12:45:00Z","unix_ts":1774269900,"v":0},{"res":"15m","t":"2026-03-23T13:00:00Z","unix_ts":1774270800,"v":0},{"res":"15m","t":"2026-03-23T13:15:00Z","unix_ts":1774271700,"v":0},{"res":"15m","t":"2026-03-23T13:30:00Z","unix_ts":1774272600,"v":0},{"res":"15m","t":"2026-03-23T13:45:00Z","unix_ts":1774273500,"v":0},{"res":"15m","t":"2026-03-23T14:00:00Z","unix_ts":1774274400,"v":1},{"res":"15m","t":"2026-03-23T14:15:00Z","unix_ts":1774275300,"v":1},{"res":"15m","t":"2026-03-23T14:30:00Z","unix_ts":1774276200,"v":1},{"res":"15m","t":"2026-03-23T14:45:00Z","unix_ts":1774277100,"v":1},{"res":"15m","t":"2026-03-23T15:00:00Z","unix_ts":1774278000,"v":1},{"res":"15m","t":"2026-03-23T15:15:00Z","unix_ts":1774278900,"v":1},{"res":"15m","t":"2026-03-23T15:30:00Z","unix_ts":1774279800,"v":1},{"res":"15m","t":"2026-03-23T15:45:00Z","unix_ts":1774280700,"v":1},{"res":"15m","t":"2026-03-23T16:00:00Z","unix_ts":1774281600,"v":1},{"res":"15m","t":"2026-03-23T16:15:00Z","unix_ts":1774282500,"v":1},{"res":"15m","t":"2026-03-23T16:30:00Z","unix_ts":1774283400,"v":2},{"res":"15m","t":"2026-03-23T16:45:00Z","unix_ts":1774284300,"v":2},{"res":"hr","t":"2026-03-23T17:00:00Z","unix_ts":1774285200,"v":2},{"res":"hr","t":"2026-03-23T18:00:00Z","unix_ts":1774288800,"v":1},{"res":"hr","t":"2026-03-23T19:00:00Z","unix_ts":1774292400,"v":1},{"res":"hr","t":"2026-03-23T20:00:00Z","unix_ts":1774296000,"v":1},{"res":"hr","t":"2026-03-23T21:00:00Z","unix_ts":1774299600,"v":1},{"res":"hr","t":"2026-03-23T22:00:00Z","unix_ts":1774303200,"v":0},{"res":"hr","t":"2026-03-23T23:00:00Z","unix_ts":1774306800,"v":-1},{"res":"hr","t":"2026-03-24T00:00:00Z","unix_ts":1774310400,"v":-2},{"res":"hr","t":"2026-03-24T01:00:00Z","unix_ts":1774314000,"v":-2},{"res":"hr","t":"2026-03-24T02:00:00Z","unix_ts":1774317600,"v":-3},{"res":"hr","t":"2026-03-24T03:00:00Z","unix_ts":1774321200,"v":-3},{"res":"hr","t":"2026-03-24T04:00:00Z","unix_ts":1774324800,"v":-3},{"res":"hr","t":"2026-03-24T05:00:00Z","unix_ts":1774328400,"v":-4},{"res":"hr","t":"2026-03-24T06:00:00Z","unix_ts":1774332000,"v":-4},{"res":"hr","t":"2026-03-24T07:00:00Z","unix_ts":1774335600,"v":-5},{"res":"hr","t":"2026-03-24T08:00:00Z","unix_ts":1774339200,"v":-5},{"res":"hr","t":"2026-03-24T09:00:00Z","unix_ts":1774342800,"v":-5},{"res":"hr","t":"2026-03-24T10:00:00Z","unix_ts":1774346400,"v":-5},{"res":"hr","t":"2026-03-24T11:00:00Z","unix_ts":1774350000,"v":-5},{"res":"hr","t":"2026-03-24T12:00:00Z","unix_ts":1774353600,"v":-5},{"res":"hr","t":"2026-03-24T13:00:00Z","unix_ts":1774357200,"v":-4},{"res":"hr","t":"2026-03-24T14:00:00Z","unix_ts":1774360800,"v":-2},{"res":"hr","t":"2026-03-24T15:00:00Z","unix_ts":1774364400,"v":-1},{"res":"hr","t":"2026-03-24T16:00:00Z","unix_ts":1774368000,"v":1},{"res":"hr","t":"2026-03-24T17:00:00Z","unix_ts":1774371600,"v":2},{"res":"hr","t":"2026-03-24T18:00:00Z","unix_ts":1774375200,"v":3},{"res":"hr","t":"2026-03-24T19:00:00Z","unix_ts":1774378800,"v":4},{"res":"hr","t":"2026-03-24T20:00:00Z","unix_ts":1774382400,"v":4},{"res":"hr","t":"2026-03-24T21:00:00Z","unix_ts":1774386000,"v":4},{"res":"hr","t":"2026-03-24T22:00:00Z","unix_ts":1774389600,"v":4},{"res":"hr","t":"2026-03-24T23:00:00Z","unix_ts":1774393200,"v":3},{"res":"hr","t":"2026-03-25T00:00:00Z","unix_ts":1774396800,"v":3},{"res":"hr","t":"2026-03-25T01:00:00Z","unix_ts":1774400400,"v":2},{"res":"hr","t":"2026-03-25T02:00:00Z","unix_ts":1774404000,"v":1},{"res":"hr","t":"2026-03-25T03:00:00Z","unix_ts":1774407600,"v":1},{"res":"hr","t":"2026-03-25T04:00:00Z","unix_ts":1774411200,"v":1},{"res":"hr","t":"2026-03-25T05:00:00Z","unix_ts":1774414800,"v":0},{"res":"hr","t":"2026-03-25T06:00:00Z","unix_ts":1774418400,"v":-1},{"res":"hr","t":"2026-03-25T07:00:00Z","unix_ts":1774422000,"v":-1},{"res":"hr","t":"2026-03-25T08:00:00Z","unix_ts":1774425600,"v":-1},{"res":"hr","t":"2026-03-25T09:00:00Z","unix_ts":1774429200,"v":-2}],"observed":[{"t":"2026-03-22T17:59:32Z","unix_ts":1774202372,"v":4},{"t":"2026-03-22T18:09:33Z","unix_ts":1774202973,"v":5},{"t":"2026-03-22T18:19:34Z","unix_ts":1774203574,"v":5},{"t":"2026-03-22T18:29:35Z","unix_ts":1774204175,"v":5},{"t":"2026-03-22T18:39:36Z","unix_ts":1774204776,"v":5},{"t":"2026-03-22T18:49:37Z","unix_ts":1774205377,"v":5},{"t":"2026-03-22T18:59:38Z","unix_ts":1774205978,"v":5},{"t":"2026-03-22T19:09:39Z","unix_ts":1774206579,"v":5},{"t":"2026-03-22T19:19:40Z","unix_ts":1774207180,"v":5},{"t":"2026-03-22T19:29:41Z","unix_ts":1774207781,"v":5},{"t":"2026-03-22T19:39:42Z","unix_ts":1774208382,"v":4},{"t":"2026-03-22T19:49:43Z","unix_ts":1774208983,"v":4},{"t":"2026-03-22T19:59:44Z","unix_ts":1774209584,"v":4},{"t":"2026-03-22T20:09:45Z","unix_ts":1774210185,"v":5},{"t":"2026-03-22T20:19:47Z","unix_ts":1774210787,"v":5},{"t":"2026-03-22T20:29:48Z","unix_ts":1774211388,"v":5},{"t":"2026-03-22T20:39:49Z","unix_ts":1774211989,"v":5},{"t":"2026-03-22T20:49:50Z","unix_ts":1774212590,"v":5},{"t":"2026-03-22T20:59:51Z","unix_ts":1774213191,"v":5},{"t":"2026-03-22T21:09:52Z","unix_ts":1774213792,"v":4},{"t":"2026-03-22T21:19:53Z","unix_ts":1774214393,"v":4},{"t":"2026-03-22T21:29:54Z","unix_ts":1774214994,"v":4},{"t":"2026-03-22T21:39:55Z","unix_ts":1774215595,"v":4},{"t":"2026-03-22T21:49:56Z","unix_ts":1774216196,"v":4},{"t":"2026-03-22T21:59:57Z","unix_ts":1774216797,"v":4},{"t":"2026-03-22T22:09:58Z","unix_ts":1774217398,"v":4},{"t":"2026-03-22T22:20:00Z","unix_ts":1774218000,"v":4},{"t":"2026-03-22T22:30:01Z","unix_ts":1774218601,"v":4},{"t":"2026-03-22T22:40:02Z","unix_ts":1774219202,"v":4},{"t":"2026-03-22T22:50:03Z","unix_ts":1774219803,"v":3},{"t":"2026-03-23T00:00:10Z","unix_ts":1774224010,"v":3},{"t":"2026-03-23T02:30:26Z","unix_ts":1774233026,"v":2},{"t":"2026-03-23T05:00:41Z","unix_ts":1774242041,"v":2},{"t":"2026-03-23T07:30:58Z","unix_ts":1774251058,"v":1},{"t":"2026-03-23T09:11:08Z","unix_ts":1774257068,"v":0},{"t":"2026-03-23T09:41:12Z","unix_ts":1774258872,"v":0},{"t":"2026-03-23T09:51:13Z","unix_ts":1774259473,"v":0}]},"EGLC":{"current":{"t":"2026-03-23T09:47:03Z","unix_ts":1774259223,"v":10},"forecast":[{"res":"15m","t":"2026-03-22T10:00:00Z","unix_ts":1774173600,"v":8},{"res":"15m","t":"2026-03-22T10:15:00Z","unix_ts":1774174500,"v":9},{"res":"15m","t":"2026-03-22T10:30:00Z","unix_ts":1774175400,"v":10},{"res":"15m","t":"2026-03-23T09:30:00Z","unix_ts":1774258200,"v":10},{"res":"15m","t":"2026-03-23T09:45:00Z","unix_ts":1774259100,"v":10},{"res":"15m","t":"2026-03-23T10:00:00Z","unix_ts":1774260000,"v":10},{"res":"15m","t":"2026-03-23T14:00:00Z","unix_ts":1774274400,"v":14},{"res":"15m","t":"2026-03-23T16:45:00Z","unix_ts":1774284300,"v":14},{"res":"hr","t":"2026-03-23T17:00:00Z","unix_ts":1774285200,"v":14},{"res":"hr","t":"2026-03-23T22:00:00Z","unix_ts":1774303200,"v":11},{"res":"hr","t":"2026-03-24T07:00:00Z","unix_ts":1774335600,"v":10},{"res":"hr","t":"2026-03-24T14:00:00Z","unix_ts":1774360800,"v":14},{"res":"hr","t":"2026-03-25T09:00:00Z","unix_ts":1774429200,"v":6}],"observed":[{"t":"2026-03-22T17:55:24Z","unix_ts":1774202124,"v":12},{"t":"2026-03-22T22:45:54Z","unix_ts":1774219554,"v":8},{"t":"2026-03-23T04:16:28Z","unix_ts":1774239388,"v":5},{"t":"2026-03-23T07:46:51Z","unix_ts":1774252011,"v":7},{"t":"2026-03-23T09:47:03Z","unix_ts":1774259223,"v":10}]},"EPWA":{"current":{"t":"2026-03-23T09:46:17Z","unix_ts":1774259177,"v":13},"forecast":[{"res":"15m","t":"2026-03-22T10:00:00Z","unix_ts":1774173600,"v":11},{"res":"15m","t":"2026-03-22T13:15:00Z","unix_ts":1774185300,"v":15},{"res":"15m","t":"2026-03-23T09:30:00Z","unix_ts":1774258200,"v":13},{"res":"15m","t":"2026-03-23T16:45:00Z","unix_ts":1774284300,"v":12},{"res":"hr","t":"2026-03-23T17:00:00Z","unix_ts":1774285200,"v":12},{"res":"hr","t":"2026-03-24T12:00:00Z","unix_ts":1774353600,"v":16},{"res":"hr","t":"2026-03-25T09:00:00Z","unix_ts":1774429200,"v":13}],"observed":[{"t":"2026-03-22T17:54:42Z","unix_ts":1774202082,"v":11},{"t":"2026-03-22T22:35:10Z","unix_ts":1774218910,"v":5},{"t":"2026-03-23T00:35:22Z","unix_ts":1774226122,"v":2},{"t":"2026-03-23T06:56:00Z","unix_ts":1774248960,"v":6},{"t":"2026-03-23T08:36:10Z","unix_ts":1774254970,"v":11},{"t":"2026-03-23T09:46:17Z","unix_ts":1774259177,"v":13}]},"LFPG":{"current":{"t":"2026-03-23T09:51:19Z","unix_ts":1774259479,"v":11},"forecast":[{"res":"15m","t":"2026-03-22T10:00:00Z","unix_ts":1774173600,"v":11},{"res":"15m","t":"2026-03-22T14:30:00Z","unix_ts":1774189800,"v":15},{"res":"15m","t":"2026-03-23T09:30:00Z","unix_ts":1774258200,"v":11},{"res":"15m","t":"2026-03-23T16:45:00Z","unix_ts":1774284300,"v":15},{"res":"hr","t":"2026-03-23T17:00:00Z","unix_ts":1774285200,"v":15},{"res":"hr","t":"2026-03-24T14:00:00Z","unix_ts":1774360800,"v":18},{"res":"hr","t":"2026-03-25T09:00:00Z","unix_ts":1774429200,"v":8}],"observed":[{"t":"2026-03-22T17:59:38Z","unix_ts":1774202378,"v":12},{"t":"2026-03-22T22:00:04Z","unix_ts":1774216804,"v":8},{"t":"2026-03-23T02:40:32Z","unix_ts":1774233632,"v":5},{"t":"2026-03-23T07:41:06Z","unix_ts":1774251666,"v":7},{"t":"2026-03-23T09:51:19Z","unix_ts":1774259479,"v":11}]},"LLBG":{"current":{"t":"2026-03-23T09:50:02Z","unix_ts":1774259402,"v":20},"forecast":[{"res":"15m","t":"2026-03-22T10:00:00Z","unix_ts":1774173600,"v":18},{"res":"15m","t":"2026-03-22T11:00:00Z","unix_ts":1774177200,"v":19},{"res":"15m","t":"2026-03-23T09:30:00Z","unix_ts":1774258200,"v":20},{"res":"15m","t":"2026-03-23T16:30:00Z","unix_ts":1774283400,"v":17},{"res":"hr","t":"2026-03-23T17:00:00Z","unix_ts":1774285200,"v":16},{"res":"hr","t":"2026-03-24T13:00:00Z","unix_ts":1774357200,"v":19},{"res":"hr","t":"2026-03-25T09:00:00Z","unix_ts":1774429200,"v":18}],"observed":[{"t":"2026-03-22T17:58:09Z","unix_ts":1774202289,"v":14},{"t":"2026-03-22T22:08:34Z","unix_ts":1774217314,"v":11},{"t":"2026-03-23T04:59:28Z","unix_ts":1774241968,"v":13},{"t":"2026-03-23T07:49:50Z","unix_ts":1774252190,"v":20},{"t":"2026-03-23T09:50:02Z","unix_ts":1774259402,"v":20}]},"LTAC":{"current":{"t":"2026-03-23T09:48:56Z","unix_ts":1774259336,"v":11},"forecast":[{"res":"15m","t":"2026-03-22T10:00:00Z","unix_ts":1774173600,"v":11},{"res":"15m","t":"2026-03-22T14:15:00Z","unix_ts":1774188900,"v":12},{"res":"15m","t":"2026-03-23T09:30:00Z","unix_ts":1774258200,"v":11},{"res":"15m","t":"2026-03-23T16:45:00Z","unix_ts":1774284300,"v":9},{"res":"hr","t":"2026-03-23T17:00:00Z","unix_ts":1774285200,"v":8},{"res":"hr","t":"2026-03-24T15:00:00Z","unix_ts":1774364400,"v":10},{"res":"hr","t":"2026-03-25T09:00:00Z","unix_ts":1774429200,"v":9}],"observed":[{"t":"2026-03-22T17:57:17Z","unix_ts":1774202237,"v":7},{"t":"2026-03-22T22:27:47Z","unix_ts":1774218467,"v":7},{"t":"2026-03-23T02:48:12Z","unix_ts":1774234092,"v":4},{"t":"2026-03-23T07:28:41Z","unix_ts":1774250921,"v":9},{"t":"2026-03-23T09:48:56Z","unix_ts":1774259336,"v":11}]},"RJTT":{"current":{"t":"2026-03-23T09:54:45Z","unix_ts":1774259685,"v":13},"forecast":[{"res":"15m","t":"2026-03-22T10:00:00Z","unix_ts":1774173600,"v":14},{"res":"15m","t":"2026-03-22T11:00:00Z","unix_ts":1774177200,"v":15},{"res":"15m","t":"2026-03-23T09:30:00Z","unix_ts":1774258200,"v":13},{"res":"15m","t":"2026-03-23T16:45:00Z","unix_ts":1774284300,"v":11},{"res":"hr","t":"2026-03-23T17:00:00Z","unix_ts":1774285200,"v":11},{"res":"hr","t":"2026-03-24T06:00:00Z","unix_ts":1774332000,"v":16},{"res":"hr","t":"2026-03-25T09:00:00Z","unix_ts":1774429200,"v":13}],"observed":[{"t":"2026-03-22T18:02:39Z","unix_ts":1774202559,"v":12},{"t":"2026-03-22T22:43:17Z","unix_ts":1774219397,"v":11},{"t":"2026-03-23T03:43:53Z","unix_ts":1774237433,"v":13},{"t":"2026-03-23T07:44:31Z","unix_ts":1774251871,"v":14},{"t":"2026-03-23T09:54:45Z","unix_ts":1774259685,"v":13}]}};
+
+// Restore full data for CYYZ from original
+const FULL_DATA = {"CYYZ":{"current":{"unix_ts":1774259473,"v":0},"forecast":[{"unix_ts":1774173600,"v":1},{"unix_ts":1774174500,"v":1},{"unix_ts":1774175400,"v":1},{"unix_ts":1774176300,"v":1},{"unix_ts":1774177200,"v":2},{"unix_ts":1774178100,"v":2},{"unix_ts":1774179000,"v":2},{"unix_ts":1774179900,"v":2},{"unix_ts":1774180800,"v":2},{"unix_ts":1774181700,"v":2},{"unix_ts":1774182600,"v":2},{"unix_ts":1774183500,"v":3},{"unix_ts":1774184400,"v":3},{"unix_ts":1774185300,"v":2},{"unix_ts":1774186200,"v":3},{"unix_ts":1774187100,"v":3},{"unix_ts":1774188000,"v":3},{"unix_ts":1774188900,"v":2},{"unix_ts":1774189800,"v":3},{"unix_ts":1774190700,"v":3},{"unix_ts":1774191600,"v":3},{"unix_ts":1774192500,"v":3},{"unix_ts":1774193400,"v":3},{"unix_ts":1774194300,"v":4},{"unix_ts":1774195200,"v":4},{"unix_ts":1774196100,"v":3},{"unix_ts":1774197000,"v":4},{"unix_ts":1774197900,"v":5},{"unix_ts":1774198800,"v":4},{"unix_ts":1774199700,"v":4},{"unix_ts":1774200600,"v":4},{"unix_ts":1774201500,"v":4},{"unix_ts":1774202400,"v":5},{"unix_ts":1774203300,"v":5},{"unix_ts":1774204200,"v":5},{"unix_ts":1774205100,"v":5},{"unix_ts":1774206000,"v":5},{"unix_ts":1774206900,"v":5},{"unix_ts":1774207800,"v":5},{"unix_ts":1774208700,"v":5},{"unix_ts":1774209600,"v":5},{"unix_ts":1774210500,"v":5},{"unix_ts":1774211400,"v":5},{"unix_ts":1774212300,"v":5},{"unix_ts":1774213200,"v":5},{"unix_ts":1774214100,"v":4},{"unix_ts":1774215000,"v":4},{"unix_ts":1774215900,"v":4},{"unix_ts":1774216800,"v":4},{"unix_ts":1774217700,"v":4},{"unix_ts":1774218600,"v":4},{"unix_ts":1774219500,"v":4},{"unix_ts":1774220400,"v":3},{"unix_ts":1774221300,"v":4},{"unix_ts":1774222200,"v":4},{"unix_ts":1774223100,"v":4},{"unix_ts":1774224000,"v":3},{"unix_ts":1774224900,"v":3},{"unix_ts":1774225800,"v":3},{"unix_ts":1774226700,"v":3},{"unix_ts":1774227600,"v":3},{"unix_ts":1774228500,"v":3},{"unix_ts":1774229400,"v":3},{"unix_ts":1774230300,"v":3},{"unix_ts":1774231200,"v":3},{"unix_ts":1774232100,"v":3},{"unix_ts":1774233000,"v":3},{"unix_ts":1774233900,"v":2},{"unix_ts":1774234800,"v":2},{"unix_ts":1774235700,"v":3},{"unix_ts":1774236600,"v":3},{"unix_ts":1774237500,"v":3},{"unix_ts":1774238400,"v":2},{"unix_ts":1774239300,"v":2},{"unix_ts":1774240200,"v":2},{"unix_ts":1774241100,"v":2},{"unix_ts":1774242000,"v":1},{"unix_ts":1774242900,"v":1},{"unix_ts":1774243800,"v":1},{"unix_ts":1774244700,"v":1},{"unix_ts":1774245600,"v":1},{"unix_ts":1774246500,"v":1},{"unix_ts":1774247400,"v":1},{"unix_ts":1774248300,"v":1},{"unix_ts":1774249200,"v":1},{"unix_ts":1774250100,"v":1},{"unix_ts":1774251000,"v":1},{"unix_ts":1774251900,"v":1},{"unix_ts":1774252800,"v":0},{"unix_ts":1774253700,"v":1},{"unix_ts":1774254600,"v":1},{"unix_ts":1774255500,"v":1},{"unix_ts":1774256400,"v":1},{"unix_ts":1774257300,"v":0},{"unix_ts":1774258200,"v":0},{"unix_ts":1774259100,"v":0},{"unix_ts":1774260000,"v":0},{"unix_ts":1774260900,"v":0},{"unix_ts":1774261800,"v":0},{"unix_ts":1774262700,"v":0},{"unix_ts":1774263600,"v":0},{"unix_ts":1774264500,"v":0},{"unix_ts":1774265400,"v":0},{"unix_ts":1774266300,"v":0},{"unix_ts":1774267200,"v":0},{"unix_ts":1774268100,"v":0},{"unix_ts":1774269000,"v":0},{"unix_ts":1774269900,"v":0},{"unix_ts":1774270800,"v":0},{"unix_ts":1774271700,"v":0},{"unix_ts":1774272600,"v":0},{"unix_ts":1774273500,"v":0},{"unix_ts":1774274400,"v":1},{"unix_ts":1774275300,"v":1},{"unix_ts":1774276200,"v":1},{"unix_ts":1774277100,"v":1},{"unix_ts":1774278000,"v":1},{"unix_ts":1774278900,"v":1},{"unix_ts":1774279800,"v":1},{"unix_ts":1774280700,"v":1},{"unix_ts":1774281600,"v":1},{"unix_ts":1774282500,"v":1},{"unix_ts":1774283400,"v":2},{"unix_ts":1774284300,"v":2},{"unix_ts":1774285200,"v":2},{"unix_ts":1774288800,"v":1},{"unix_ts":1774292400,"v":1},{"unix_ts":1774296000,"v":1},{"unix_ts":1774299600,"v":1},{"unix_ts":1774303200,"v":0},{"unix_ts":1774306800,"v":-1},{"unix_ts":1774310400,"v":-2},{"unix_ts":1774314000,"v":-2},{"unix_ts":1774317600,"v":-3},{"unix_ts":1774321200,"v":-3},{"unix_ts":1774324800,"v":-3},{"unix_ts":1774328400,"v":-4},{"unix_ts":1774332000,"v":-4},{"unix_ts":1774335600,"v":-5},{"unix_ts":1774339200,"v":-5},{"unix_ts":1774342800,"v":-5},{"unix_ts":1774346400,"v":-5},{"unix_ts":1774350000,"v":-5},{"unix_ts":1774353600,"v":-5},{"unix_ts":1774357200,"v":-4},{"unix_ts":1774360800,"v":-2},{"unix_ts":1774364400,"v":-1},{"unix_ts":1774368000,"v":1},{"unix_ts":1774371600,"v":2},{"unix_ts":1774375200,"v":3},{"unix_ts":1774378800,"v":4},{"unix_ts":1774382400,"v":4},{"unix_ts":1774386000,"v":4},{"unix_ts":1774389600,"v":4},{"unix_ts":1774393200,"v":3},{"unix_ts":1774396800,"v":3},{"unix_ts":1774400400,"v":2},{"unix_ts":1774404000,"v":1},{"unix_ts":1774407600,"v":1},{"unix_ts":1774411200,"v":1},{"unix_ts":1774414800,"v":0},{"unix_ts":1774418400,"v":-1},{"unix_ts":1774422000,"v":-1},{"unix_ts":1774425600,"v":-1},{"unix_ts":1774429200,"v":-2}],"observed":[{"unix_ts":1774202372,"v":4},{"unix_ts":1774202973,"v":5},{"unix_ts":1774203574,"v":5},{"unix_ts":1774204175,"v":5},{"unix_ts":1774204776,"v":5},{"unix_ts":1774205377,"v":5},{"unix_ts":1774205978,"v":5},{"unix_ts":1774206579,"v":5},{"unix_ts":1774207180,"v":5},{"unix_ts":1774207781,"v":5},{"unix_ts":1774208382,"v":4},{"unix_ts":1774208983,"v":4},{"unix_ts":1774209584,"v":4},{"unix_ts":1774210185,"v":5},{"unix_ts":1774210787,"v":5},{"unix_ts":1774211388,"v":5},{"unix_ts":1774211989,"v":5},{"unix_ts":1774212590,"v":5},{"unix_ts":1774213191,"v":5},{"unix_ts":1774213792,"v":4},{"unix_ts":1774214393,"v":4},{"unix_ts":1774214994,"v":4},{"unix_ts":1774215595,"v":4},{"unix_ts":1774216196,"v":4},{"unix_ts":1774216797,"v":4},{"unix_ts":1774217398,"v":4},{"unix_ts":1774218000,"v":4},{"unix_ts":1774218601,"v":4},{"unix_ts":1774219202,"v":4},{"unix_ts":1774219803,"v":3},{"unix_ts":1774220404,"v":3},{"unix_ts":1774221005,"v":4},{"unix_ts":1774221606,"v":4},{"unix_ts":1774222207,"v":4},{"unix_ts":1774222808,"v":4},{"unix_ts":1774223409,"v":3},{"unix_ts":1774224010,"v":3},{"unix_ts":1774224611,"v":3},{"unix_ts":1774225212,"v":3},{"unix_ts":1774225813,"v":3},{"unix_ts":1774226414,"v":3},{"unix_ts":1774227015,"v":3},{"unix_ts":1774227616,"v":3},{"unix_ts":1774228217,"v":3},{"unix_ts":1774228819,"v":3},{"unix_ts":1774229420,"v":3},{"unix_ts":1774230021,"v":3},{"unix_ts":1774230622,"v":3},{"unix_ts":1774231223,"v":3},{"unix_ts":1774231824,"v":3},{"unix_ts":1774232425,"v":3},{"unix_ts":1774233026,"v":2},{"unix_ts":1774233627,"v":2},{"unix_ts":1774234228,"v":2},{"unix_ts":1774234829,"v":2},{"unix_ts":1774235430,"v":3},{"unix_ts":1774236031,"v":3},{"unix_ts":1774236632,"v":3},{"unix_ts":1774237233,"v":3},{"unix_ts":1774237834,"v":2},{"unix_ts":1774238435,"v":2},{"unix_ts":1774239036,"v":2},{"unix_ts":1774239637,"v":2},{"unix_ts":1774240238,"v":2},{"unix_ts":1774240839,"v":2},{"unix_ts":1774241440,"v":2},{"unix_ts":1774242041,"v":2},{"unix_ts":1774242643,"v":1},{"unix_ts":1774243244,"v":1},{"unix_ts":1774243845,"v":1},{"unix_ts":1774244446,"v":1},{"unix_ts":1774245047,"v":1},{"unix_ts":1774245648,"v":1},{"unix_ts":1774246249,"v":1},{"unix_ts":1774246850,"v":1},{"unix_ts":1774247452,"v":1},{"unix_ts":1774248053,"v":1},{"unix_ts":1774248654,"v":1},{"unix_ts":1774249255,"v":1},{"unix_ts":1774249856,"v":1},{"unix_ts":1774250457,"v":1},{"unix_ts":1774251058,"v":1},{"unix_ts":1774251659,"v":1},{"unix_ts":1774252260,"v":1},{"unix_ts":1774252861,"v":1},{"unix_ts":1774253462,"v":1},{"unix_ts":1774254063,"v":1},{"unix_ts":1774254664,"v":1},{"unix_ts":1774255265,"v":1},{"unix_ts":1774255866,"v":1},{"unix_ts":1774256467,"v":1},{"unix_ts":1774257068,"v":0},{"unix_ts":1774257670,"v":0},{"unix_ts":1774258271,"v":0},{"unix_ts":1774258872,"v":0},{"unix_ts":1774259473,"v":0}]}};
+
+// Merge CYYZ full data back
+Object.keys(FULL_DATA).forEach(k => {
+  if (RAW[k]) {
+    RAW[k].forecast = FULL_DATA[k].forecast;
+    RAW[k].observed = FULL_DATA[k].observed;
+  }
+});
+
+// data below
+let activeCode = 'LLBG';
+let activeTab = 0;
+let chart = null;
+
+function fmtTime(unix_ts) {
+  return new Date(unix_ts * 1000).toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit', timeZone:'UTC' });
+}
+function fmtLocalTime(unix_ts, tz) {
+  try { return new Date(unix_ts * 1000).toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit', timeZone: tz }); }
+  catch(e) { return fmtTime(unix_ts); }
+}
+function fmtDate(unix_ts) {
+  return new Date(unix_ts * 1000).toLocaleDateString('en-GB', { day:'numeric', month:'short', timeZone:'UTC' });
+}
+function fmtShort(unix_ts) {
+  const d = new Date(unix_ts * 1000);
+  return d.toLocaleDateString('en-GB', { month:'short', day:'numeric', timeZone:'UTC' })
+    + ' ' + d.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit', timeZone:'UTC' });
+}
+function sign(v) { return v > 0 ? '+' : ''; }
+function tempColor(v) {
+  if (v >= 20) return '#ff6b40';
+  if (v >= 15) return '#ffaa44';
+  if (v >= 10) return '#2de8ff';
+  if (v >= 5)  return '#44b8ff';
+  if (v >= 0)  return '#6688ee';
+  return '#8866dd';
+}
+
+function buildSidebar() {
+  const list = document.getElementById('apList');
+  list.innerHTML = '';
+  Object.keys(RAW).forEach(code => {
+    const d = RAW[code];
+    const meta = AIRPORT_META[code] || { city: code };
+    const cur = d.current.v;
+    const obs = d.observed;
+    const prev = obs.length > 1 ? obs[obs.length-2].v : cur;
+    const delta = cur - prev;
+    const deltaStr = delta > 0 ? `+${delta}°` : delta < 0 ? `${delta}°` : '±0°';
+    const el = document.createElement('div');
+    el.className = 'ap-card' + (code === activeCode ? ' active' : '');
+    el.innerHTML = `
+      <div class="ap-left">
+        <div class="ap-code">${code}</div>
+        <div class="ap-city">${meta.city}</div>
+      </div>
+      <div class="ap-right">
+        <div class="ap-temp" style="color:${tempColor(cur)}">${sign(cur)}${cur}°</div>
+        <div class="ap-trend">${deltaStr}</div>
+      </div>`;
+    el.onclick = () => { activeCode = code; buildSidebar(); renderMain(); };
+    list.appendChild(el);
+  });
+  const nowTs = RAW[activeCode].current.unix_ts;
+  document.getElementById('nowTs').textContent = `UTC ${fmtTime(nowTs)} · ${fmtDate(nowTs)}`;
+}
+
+function buildChart(code, tab) {
+  const d = RAW[code];
+  const nowTs = d.current.unix_ts;
+  const ctx = document.getElementById('ch').getContext('2d');
+  if (chart) { chart.destroy(); chart = null; }
+
+  let fcPts, obsWindow, nowIdx;
+
+  if (tab === 0) {
+    const from = nowTs - 12*3600, to = nowTs + 12*3600;
+    fcPts = d.forecast.filter(p => p.unix_ts >= from && p.unix_ts <= to);
+    obsWindow = d.observed.filter(p => p.unix_ts >= from && p.unix_ts <= nowTs);
+    nowIdx = fcPts.findIndex(p => p.unix_ts >= nowTs);
+  } else {
+    fcPts = d.forecast.filter(p => p.unix_ts >= nowTs - 3600);
+    obsWindow = d.observed.filter(p => p.unix_ts >= nowTs - 12*3600 && p.unix_ts <= nowTs);
+    nowIdx = fcPts.findIndex(p => p.unix_ts >= nowTs);
+  }
+  if (nowIdx < 0) nowIdx = 0;
+
+  const labels = fcPts.map(p => tab === 0 ? fmtTime(p.unix_ts) : fmtShort(p.unix_ts));
+
+  // Align observed onto forecast grid (nearest within 600s)
+  const obsAligned = fcPts.map(fp => {
+    const near = obsWindow.find(o => Math.abs(o.unix_ts - fp.unix_ts) < 600);
+    return near != null ? near.v : null;
+  });
+
+  const allVals = [...fcPts.map(p=>p.v), ...obsWindow.map(p=>p.v)];
+  const minV = Math.min(...allVals) - 1;
+  const maxV = Math.max(...allVals) + 1;
+  const gridC = 'rgba(100,130,200,0.1)';
+  const tickC = 'rgba(120,150,200,0.45)';
+
+  // Find two bracket points around nowTs for precise interpolation
+  const beforeIdx = fcPts.reduce((best, p, i) => p.unix_ts <= nowTs ? i : best, 0);
+  const afterIdx  = fcPts.findIndex(p => p.unix_ts > nowTs);
+
+  const nowLinePlugin = {
+    id: 'nowLine',
+    afterDraw(ch) {
+      const meta = ch.getDatasetMeta(0);
+      if (!meta.data.length) return;
+      const { ctx: c, chartArea: { top, bottom } } = ch;
+
+      let x;
+      if (afterIdx > 0 && meta.data[beforeIdx] && meta.data[afterIdx]) {
+        const x0 = meta.data[beforeIdx].x, x1 = meta.data[afterIdx].x;
+        const t0 = fcPts[beforeIdx].unix_ts, t1 = fcPts[afterIdx].unix_ts;
+        const frac = t1 > t0 ? (nowTs - t0) / (t1 - t0) : 0;
+        x = x0 + frac * (x1 - x0);
+      } else {
+        x = meta.data[Math.min(nowIdx, meta.data.length-1)].x;
+      }
+
+      c.save();
+      c.setLineDash([4,4]);
+      c.strokeStyle = 'rgba(45,232,255,0.55)';
+      c.lineWidth = 1.5;
+      c.beginPath(); c.moveTo(x, top); c.lineTo(x, bottom); c.stroke();
+
+      // NOW label at top of line
+      c.setLineDash([]);
+      c.fillStyle = '#2de8ff';
+      c.font = '500 9px JetBrains Mono, monospace';
+      c.textAlign = 'center';
+      c.fillText('NOW', x, top + 10);
+      c.restore();
+    }
+  };
+
+  const cyanGrad = ctx.createLinearGradient(0,0,0,220);
+  cyanGrad.addColorStop(0, 'rgba(45,232,255,0.2)');
+  cyanGrad.addColorStop(1, 'rgba(45,232,255,0.0)');
+
+  const orgGrad = ctx.createLinearGradient(0,0,0,220);
+  orgGrad.addColorStop(0, 'rgba(255,170,68,0.2)');
+  orgGrad.addColorStop(1, 'rgba(255,170,68,0.0)');
+
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Forecast',
+          data: fcPts.map(p=>p.v),
+          borderColor: '#2de8ff',
+          borderWidth: 2,
+          backgroundColor: cyanGrad,
+          pointRadius: 0, pointHoverRadius: 4,
+          tension: 0.35, fill: true, order: 2
+        },
+        {
+          label: 'Observed',
+          data: obsAligned,
+          borderColor: '#ffaa44',
+          borderWidth: 2,
+          backgroundColor: orgGrad,
+          pointRadius: 3,
+          pointBackgroundColor: '#ffaa44',
+          pointBorderColor: 'rgba(255,170,68,0.3)',
+          pointBorderWidth: 3,
+          pointHoverRadius: 5,
+          tension: 0.35, fill: true,
+          spanGaps: false, order: 1
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 400, easing: 'easeInOutSine' },
+      interaction: { mode:'index', intersect:false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: 'rgba(5,9,24,0.95)',
+          borderColor: 'rgba(45,232,255,0.22)',
+          borderWidth: 1,
+          titleColor: 'rgba(160,185,230,0.55)',
+          titleFont: { family:'JetBrains Mono', size:10 },
+          bodyColor: 'rgba(220,232,255,0.9)',
+          bodyFont: { family:'JetBrains Mono', size:12 },
+          padding: 10, cornerRadius: 8,
+          callbacks: {
+            label: c => c.parsed.y == null ? null : ` ${c.dataset.label}: ${sign(c.parsed.y)}${c.parsed.y}°C`
+          }
+        }
+      },
+      scales: {
+        x: {
+          grid: { color: gridC, drawBorder:false },
+          ticks: { color: tickC, font:{ family:'JetBrains Mono', size:9.5 }, maxRotation:0, maxTicksLimit: tab===1 ? 8 : 10 },
+          border: { display:false }
+        },
+        y: {
+          min: minV, max: maxV,
+          grid: { color: gridC, drawBorder:false },
+          ticks: { color: tickC, font:{ family:'JetBrains Mono', size:9.5 }, callback: v => (v>0?'+':'')+v+'°', stepSize:2 },
+          border: { display:false }
+        }
+      }
+    },
+    plugins: [nowLinePlugin]
+  });
+}
+
+function buildTempStrip(code, tab) {
+  const d = RAW[code];
+  const nowTs = d.current.unix_ts;
+  const strip = document.getElementById('tStrip');
+  strip.innerHTML = '';
+
+  // Use same fcPts slicing logic as buildChart
+  let fcPts, obsWindow;
+  if (tab === 0) {
+    const from = nowTs - 12*3600, to = nowTs + 12*3600;
+    fcPts    = d.forecast.filter(p => p.unix_ts >= from && p.unix_ts <= to);
+    obsWindow = d.observed.filter(p => p.unix_ts >= from && p.unix_ts <= nowTs);
+  } else {
+    fcPts    = d.forecast.filter(p => p.unix_ts >= nowTs - 3600);
+    obsWindow = d.observed.filter(p => p.unix_ts >= nowTs - 12*3600 && p.unix_ts <= nowTs);
+  }
+
+  // Thin to max ~24 items for readability (keep every Nth)
+  const MAX = 24;
+  const step = Math.max(1, Math.ceil(fcPts.length / MAX));
+  const visible = fcPts.filter((_, i) => i % step === 0);
+
+  // Always include the bracket points around nowTs so NOW item is present
+  const nowPt = fcPts.reduce((best, p) => Math.abs(p.unix_ts - nowTs) < Math.abs(best.unix_ts - nowTs) ? p : best, fcPts[0]);
+  if (nowPt && !visible.find(p => p.unix_ts === nowPt.unix_ts)) {
+    const insertIdx = visible.findIndex(p => p.unix_ts > nowPt.unix_ts);
+    if (insertIdx === -1) visible.push(nowPt); else visible.splice(insertIdx, 0, nowPt);
+  }
+
+  let nowEl = null;
+
+  visible.forEach(fp => {
+    // Determine type: obs if we have a real observed reading within 600s, now if closest to nowTs, else fc
+    const nearObs = obsWindow.find(o => Math.abs(o.unix_ts - fp.unix_ts) < 600);
+    const isNow   = fp === nowPt;
+    const v       = nearObs ? nearObs.v : fp.v;
+    const kind    = isNow ? 'now' : nearObs ? 'obs' : 'fc';
+
+    const el = document.createElement('div');
+    el.className = `t-item ${kind}`;
+    el.innerHTML = `<span class="t-kind">${kind}</span><span class="t-val">${sign(v)}${v}°</span><span class="t-time">${tab === 0 ? fmtTime(fp.unix_ts) : fmtShort(fp.unix_ts)}</span>`;
+    strip.appendChild(el);
+    if (isNow) nowEl = el;
+  });
+
+  if (nowEl) setTimeout(() => nowEl.scrollIntoView({ behavior:'smooth', inline:'center', block:'nearest' }), 80);
+}
+
+function renderMain() {
+  const code = activeCode;
+  const d = RAW[code];
+  const meta = AIRPORT_META[code] || { city: code, tz: 'UTC' };
+  const nowTs = d.current.unix_ts;
+
+  document.getElementById('cityName').textContent = meta.city;
+  document.getElementById('citySub').innerHTML =
+    `${code} &nbsp;·&nbsp; Local <span>${fmtLocalTime(nowTs, meta.tz)}</span> &nbsp;·&nbsp; UTC ${fmtTime(nowTs)}`;
+
+  const cur = d.current.v;
+  document.getElementById('tempNow').innerHTML = `${sign(cur)}${cur}<span class="temp-unit">°C</span>`;
+
+  const fcVals = d.forecast.map(p=>p.v);
+  const minF = Math.min(...fcVals), maxF = Math.max(...fcVals);
+  document.getElementById('tempRange').textContent =
+    `forecast range  ${sign(minF)}${minF}° … ${sign(maxF)}${maxF}°`;
+
+  buildChart(code, activeTab);
+  buildTempStrip(code, activeTab);
+}
+
+function setTab(idx, btn) {
+  activeTab = idx;
+  document.querySelectorAll('.tab').forEach((b,i) => b.classList.toggle('active', i===idx));
+  buildChart(activeCode, activeTab);
+  buildTempStrip(activeCode, activeTab);
+}
+
+function scrollT(dir) {
+  document.getElementById('tStrip').scrollLeft += dir * 200;
+}
+
+buildSidebar();
+renderMain();
+</script>
+</body>
+</html>

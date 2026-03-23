@@ -1,2 +1,8 @@
 Hi! I need to design backend for weather application. I have several external API where I get data about hourly and/or 15-minutes temperature forecasts for different geo locations. 15-minutes - total 28 forecasts come from api, hourly - 48 forecasts data points come from api. External APIs should be requested once in 3 minutes. I need to design data schemas where i can combine (aggregate) temperatures for same place and for the same time but from different sources. 
 Ask me questions to help design this application data flow.
+
+
+Look at image, it is Glassmorphism design for weather temperature card. It will be used with browser extension.
+Please analyze the image, find key information points, blocks and areas.
+As me questions if something unclear.
+Ger ready to implemet pixel perfect html+css+js moackup in one file to copy paste and run.
