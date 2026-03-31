@@ -27,8 +27,8 @@
 
 html, body {
   width: 100%;
-  min-height: 100vh;
-  overflow-x: hidden;
+  height: 100vh;
+  overflow: hidden;
 }
 
 body {
@@ -38,120 +38,243 @@ body {
     radial-gradient(ellipse at 80% 80%, rgba(118, 75, 162, 0.15) 0%, transparent 50%),
     var(--bg);
   color: var(--text);
-  padding: 20px;
+  padding: 0;
+  display: flex;
+  justify-content: center;
 }
 
 .container {
-  max-width: 1400px;
-  margin: 0 auto;
+  display: flex;
+  width: 100%;
+  max-width: 560px;
+  height: 100vh;
+  overflow: hidden;
 }
 
-.header {
-  text-align: center;
-  margin-bottom: 30px;
+.main-content {
+  flex: 1;
+  padding: 12px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.header h1 {
-  font-size: 28px;
+.sidebar {
+  width: 140px;
+  flex-shrink: 0;
+  background: rgba(20, 25, 40, 0.9);
+  border-left: 1px solid var(--border);
+  padding: 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+.sidebar-title {
+  font-size: 12px;
   font-weight: 700;
   background: linear-gradient(135deg, #00d4ff, #667eea);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
-  margin-bottom: 8px;
-}
-
-.header p {
-  color: var(--text-muted);
-  font-size: 14px;
-}
-
-.location-selector {
-  display: flex;
-  justify-content: center;
-  gap: 10px;
-  margin-bottom: 30px;
-  flex-wrap: wrap;
+  text-align: center;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .location-btn {
-  padding: 10px 20px;
+  padding: 8px 10px;
   background: var(--card-bg);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 6px;
   color: var(--text);
-  font-size: 14px;
+  font-size: 11px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .location-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.08);
   border-color: var(--accent);
 }
 
 .location-btn.active {
-  background: var(--accent);
-  color: #000;
+  background: rgba(0, 212, 255, 0.12);
   border-color: var(--accent);
-  box-shadow: 0 0 20px var(--accent-glow);
+  box-shadow: 0 0 12px var(--accent-glow);
 }
 
-.widgets-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 20px;
-  margin-bottom: 30px;
+.loc-code {
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+}
+
+.location-btn.active .loc-code {
+  color: var(--accent);
+}
+
+.loc-name {
+  font-size: 9px;
+  color: var(--text-muted);
+}
+
+.location-btn.active .loc-name {
+  color: rgba(0, 212, 255, 0.7);
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.header h1 {
+  font-size: 14px;
+  font-weight: 700;
+  background: linear-gradient(135deg, #00d4ff, #667eea);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.header p {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: rgba(0, 212, 255, 0.1);
+  border: 1px solid rgba(0, 212, 255, 0.3);
+  border-radius: 4px;
+  font-size: 9px;
+  color: var(--accent);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.8); }
+}
+
+.loading {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+}
+
+.loading.active {
+  display: flex;
+}
+
+.spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+#content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
 }
 
 .widget {
   background: var(--card-bg);
   border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 24px;
+  border-radius: 10px;
+  padding: 12px;
   backdrop-filter: blur(10px);
 }
 
 .widget-header {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 16px;
+  gap: 8px;
+  margin-bottom: 10px;
 }
 
 .widget-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 10px;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 20px;
+  font-size: 16px;
+  flex-shrink: 0;
 }
 
 .widget-icon.current { background: var(--gradient-1); }
-.widget-icon.history { background: var(--gradient-2); }
 
 .widget-title {
-  font-size: 16px;
+  font-size: 12px;
   font-weight: 600;
 }
 
 .widget-subtitle {
-  font-size: 12px;
+  font-size: 9px;
   color: var(--text-muted);
 }
 
-/* Current Temperature Widget */
 .current-temp {
-  text-align: center;
-  padding: 20px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.temp-block {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.temp-main {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
 }
 
 .temp-value {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 72px;
+  font-size: 42px;
   font-weight: 500;
   line-height: 1;
   background: linear-gradient(180deg, var(--text), var(--text-muted));
@@ -161,23 +284,24 @@ body {
 }
 
 .temp-unit {
-  font-size: 32px;
+  font-size: 20px;
   color: var(--text-muted);
 }
 
 .temp-meta {
-  margin-top: 16px;
   display: flex;
-  justify-content: center;
-  gap: 24px;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .meta-item {
-  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 .meta-label {
-  font-size: 11px;
+  font-size: 8px;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -185,39 +309,38 @@ body {
 
 .meta-value {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 18px;
+  font-size: 13px;
   font-weight: 500;
-  margin-top: 4px;
 }
 
-/* Temperature Strip (History + Current + Forecast) */
 .temp-strip {
-  margin-top: 24px;
-  padding-top: 20px;
-  border-top: 1px solid var(--border);
+  margin-top: auto;
 }
 
 .strip-label {
-  font-size: 11px;
+  font-size: 8px;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  margin-bottom: 12px;
+  margin-bottom: 6px;
   text-align: center;
 }
 
 .strip-container {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   overflow-x: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
-  padding: 8px 4px;
+  padding: 6px;
+  height: 56px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
 }
 
 .strip-container::-webkit-scrollbar {
-  height: 4px;
+  height: 3px;
 }
 
 .strip-container::-webkit-scrollbar-track {
@@ -234,33 +357,36 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 8px 10px;
-  border-radius: 8px;
-  min-width: 56px;
-  transition: all 0.2s ease;
+  justify-content: center;
+  padding: 5px 7px;
+  border-radius: 5px;
+  min-width: 40px;
+  border: 1px solid transparent;
 }
 
 .strip-item.history {
-  background: rgba(255, 149, 0, 0.08);
-  border: 1px solid rgba(255, 149, 0, 0.2);
+  background: rgba(255, 149, 0, 0.1);
+  border-color: rgba(255, 149, 0, 0.3);
 }
 
 .strip-item.current {
-  background: rgba(0, 212, 255, 0.15);
-  border: 1px solid rgba(0, 212, 255, 0.4);
-  transform: scale(1.05);
+  background: rgba(0, 212, 255, 0.2);
+  border-color: rgba(0, 212, 255, 0.5);
+  transform: scale(1.08);
+  box-shadow: 0 0 10px rgba(0, 212, 255, 0.3);
 }
 
 .strip-item.forecast {
-  background: rgba(102, 126, 234, 0.08);
-  border: 1px solid rgba(102, 126, 234, 0.2);
+  background: rgba(102, 126, 234, 0.1);
+  border-color: rgba(102, 126, 234, 0.3);
 }
 
 .strip-time {
-  font-size: 10px;
+  font-size: 7px;
   color: var(--text-muted);
   font-family: 'JetBrains Mono', monospace;
-  margin-bottom: 4px;
+  line-height: 1;
+  margin-bottom: 3px;
 }
 
 .strip-item.current .strip-time {
@@ -270,8 +396,9 @@ body {
 
 .strip-temp {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 15px;
+  font-size: 12px;
   font-weight: 600;
+  line-height: 1;
 }
 
 .strip-item.history .strip-temp {
@@ -280,7 +407,7 @@ body {
 
 .strip-item.current .strip-temp {
   color: var(--accent);
-  font-size: 18px;
+  font-size: 14px;
 }
 
 .strip-item.forecast .strip-temp {
@@ -288,115 +415,47 @@ body {
 }
 
 .strip-type {
-  font-size: 8px;
+  font-size: 6px;
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin-top: 2px;
-}
-
-.strip-item.history .strip-type {
-  color: rgba(255, 149, 0, 0.5);
-}
-
-.strip-item.current .strip-type {
-  color: rgba(0, 212, 255, 0.6);
-}
-
-.strip-item.forecast .strip-type {
-  color: rgba(102, 126, 234, 0.5);
-}
-
-/* Chart Widgets */
-.chart-container {
-  position: relative;
-  height: 280px;
-  width: 100%;
+  line-height: 1;
 }
 
 .charts-row {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
-  gap: 20px;
-}
-
-@media (max-width: 768px) {
-  .charts-row {
-    grid-template-columns: 1fr;
-  }
-}
-
-/* Loading State */
-.loading {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 400px;
+  flex-direction: column;
+  gap: 16px;
 }
 
-.spinner {
-  width: 40px;
-  height: 40px;
-  border: 3px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
+.chart-container {
+  position: relative;
+  height: 200px;
+  width: 100%;
 }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
-/* Status indicator */
-.status-bar {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  gap: 8px;
-  padding: 12px;
-  background: var(--card-bg);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  margin-bottom: 20px;
-  font-size: 13px;
-  color: var(--text-muted);
-}
-
-.status-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--success);
-  animation: pulse 2s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.5; transform: scale(0.8); }
-}
-
-/* Legend */
 .chart-legend {
   display: flex;
   justify-content: center;
-  gap: 24px;
-  margin-top: 16px;
-  padding-top: 16px;
+  gap: 12px;
+  margin-top: 8px;
+  padding-top: 8px;
   border-top: 1px solid var(--border);
 }
 
 .legend-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 12px;
+  gap: 4px;
+  font-size: 9px;
   color: var(--text-muted);
 }
 
 .legend-line {
-  width: 24px;
-  height: 3px;
-  border-radius: 2px;
+  width: 14px;
+  height: 2px;
+  border-radius: 1px;
 }
 
 .legend-line.observed {
@@ -407,132 +466,160 @@ body {
   background: var(--forecast);
 }
 
-.legend-line.dashed {
-  background: transparent;
-  border-top: 2px dashed var(--text-muted);
-  height: 0;
+@media (max-width: 900px) {
+  body {
+    flex-direction: column;
+    height: auto;
+    overflow-y: auto;
+  }
+  
+  .container {
+    flex-direction: column;
+    height: auto;
+  }
+  
+  .sidebar {
+    width: 100%;
+    height: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding: 12px;
+    gap: 8px;
+    border-left: none;
+    border-bottom: 1px solid var(--border);
+  }
+  
+  .sidebar-title {
+    width: 100%;
+    margin-bottom: 4px;
+  }
+  
+  .location-btn {
+    padding: 8px 10px;
+    min-width: 80px;
+  }
+  
+  .main-content {
+    padding: 12px;
+  }
+  
+  .current-temp {
+    flex-direction: column;
+    align-items: center;
+  }
+  
+  .temp-value {
+    font-size: 48px;
+  }
 }
 </style>
 </head>
 <body>
 
 <div class="container">
-  <div class="header">
-    <h1>🌤️ Weather Temperature Monitor</h1>
-    <p>Real-time temperature data from airports worldwide</p>
-  </div>
+  <main class="main-content">
+    <div class="header">
+      <h1>🌤️ Weather Monitor</h1>
+      <p>Live airport temperatures</p>
+    </div>
 
-  <div class="status-bar" id="statusBar">
-    <div class="status-dot"></div>
-    <span id="statusText">Connecting to weather API...</span>
-  </div>
+    <div id="loading" class="loading">
+      <div class="spinner"></div>
+    </div>
 
-  <div class="location-selector" id="locationSelector">
-    <!-- Generated dynamically -->
-  </div>
-
-  <div id="loading" class="loading">
-    <div class="spinner"></div>
-  </div>
-
-  <div id="content" style="display: none;">
-    <!-- Info Widgets -->
-    <div class="widgets-grid">
-      <!-- Current Temperature -->
+    <div id="content" style="display: none;">
       <div class="widget">
         <div class="widget-header">
           <div class="widget-icon current">🌡️</div>
-          <div>
+          <div style="flex: 1;">
             <div class="widget-title">Current Temperature</div>
             <div class="widget-subtitle" id="currentLocation">—</div>
           </div>
+          <div class="status-bar" id="statusBar">
+            <div class="status-dot"></div>
+            <span id="statusText">Live</span>
+          </div>
         </div>
         <div class="current-temp">
-          <div class="temp-value" id="currentTemp">--</div>
-          <div class="temp-unit">°C</div>
-          <div class="temp-meta">
-            <div class="meta-item">
-              <div class="meta-label">Updated</div>
-              <div class="meta-value" id="currentTime">--:--</div>
+          <div class="temp-block">
+            <div class="temp-main">
+              <div class="temp-value" id="currentTemp">--</div>
+              <div class="temp-unit">°C</div>
             </div>
-            <div class="meta-item">
-              <div class="meta-label">24h High</div>
-              <div class="meta-value" id="tempHigh">--°</div>
-            </div>
-            <div class="meta-item">
-              <div class="meta-label">24h Low</div>
-              <div class="meta-value" id="tempLow">--°</div>
+            <div class="temp-meta">
+              <div class="meta-item">
+                <div class="meta-label">Updated</div>
+                <div class="meta-value" id="currentTime">--:--</div>
+              </div>
+              <div class="meta-item">
+                <div class="meta-label">High</div>
+                <div class="meta-value" id="tempHigh">--°</div>
+              </div>
+              <div class="meta-item">
+                <div class="meta-label">Low</div>
+                <div class="meta-value" id="tempLow">--°</div>
+              </div>
             </div>
           </div>
           <div class="temp-strip">
-            <div class="strip-label">12h History · Current · 7h Forecast</div>
-            <div class="strip-container" id="tempStrip">
-              <!-- Generated dynamically -->
+            <div class="strip-label">4h · Now · +7h</div>
+            <div class="strip-container" id="tempStrip"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="charts-row">
+        <div class="widget">
+          <div class="widget-header">
+            <div>
+              <div class="widget-title">7-Hour Forecast</div>
+              <div class="widget-subtitle">15-min intervals</div>
+            </div>
+          </div>
+          <div class="chart-container">
+            <canvas id="chart7h"></canvas>
+          </div>
+          <div class="chart-legend">
+            <div class="legend-item">
+              <div class="legend-line observed"></div>
+              <span>History</span>
+            </div>
+            <div class="legend-item">
+              <div class="legend-line forecast"></div>
+              <span>Forecast</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="widget">
+          <div class="widget-header">
+            <div>
+              <div class="widget-title">2-Day Forecast</div>
+              <div class="widget-subtitle">Hourly data</div>
+            </div>
+          </div>
+          <div class="chart-container">
+            <canvas id="chart2d"></canvas>
+          </div>
+          <div class="chart-legend">
+            <div class="legend-item">
+              <div class="legend-line observed"></div>
+              <span>History</span>
+            </div>
+            <div class="legend-item">
+              <div class="legend-line forecast"></div>
+              <span>Forecast</span>
             </div>
           </div>
         </div>
       </div>
     </div>
+  </main>
 
-    <!-- Charts -->
-    <div class="charts-row">
-      <!-- 7 Hour Forecast Chart -->
-      <div class="widget">
-        <div class="widget-header">
-          <div class="widget-icon" style="background: var(--gradient-1);">📈</div>
-          <div>
-            <div class="widget-title">7-Hour Forecast</div>
-            <div class="widget-subtitle">Next 7 hours at 15-min intervals</div>
-          </div>
-        </div>
-        <div class="chart-container">
-          <canvas id="chart7h"></canvas>
-        </div>
-        <div class="chart-legend">
-          <div class="legend-item">
-            <div class="legend-line observed"></div>
-            <span>History</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-line forecast"></div>
-            <span>Current</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-line forecast" style="background:#667eea"></div>
-            <span>Forecast</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- 2 Day Forecast Chart -->
-      <div class="widget">
-        <div class="widget-header">
-          <div class="widget-icon" style="background: var(--gradient-2);">📊</div>
-          <div>
-            <div class="widget-title">2-Day Forecast</div>
-            <div class="widget-subtitle">48 hours at hourly intervals</div>
-          </div>
-        </div>
-        <div class="chart-container">
-          <canvas id="chart2d"></canvas>
-        </div>
-        <div class="chart-legend">
-          <div class="legend-item">
-            <div class="legend-line observed"></div>
-            <span>History</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-line forecast" style="background:#667eea"></div>
-            <span>Current</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-line forecast" style="background:#667eea"></div>
-            <span>Forecast</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
+  <aside class="sidebar">
+    <div class="sidebar-title">Locations</div>
+    <div id="locationSelector"></div>
+  </aside>
 </div>
 
 <script>
@@ -552,7 +639,6 @@ let weatherData = null;
 let chart7hInstance = null;
 let chart2dInstance = null;
 
-// Initialize
 document.addEventListener('DOMContentLoaded', () => {
   initLocationSelector();
   fetchWeatherData();
@@ -563,7 +649,8 @@ function initLocationSelector() {
   container.innerHTML = Object.entries(LOCATIONS).map(([code, name]) => 
     `<button class="location-btn ${code === currentLocation ? 'active' : ''}" 
              onclick="selectLocation('${code}')">
-       ${code} — ${name}
+       <span class="loc-code">${code}</span>
+       <span class="loc-name">${name}</span>
      </button>`
   ).join('');
 }
@@ -571,26 +658,26 @@ function initLocationSelector() {
 function selectLocation(code) {
   currentLocation = code;
   document.querySelectorAll('.location-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.textContent.startsWith(code));
+    const btnCode = btn.querySelector('.loc-code').textContent;
+    btn.classList.toggle('active', btnCode === code);
   });
   fetchWeatherData();
 }
 
 async function fetchWeatherData() {
   showLoading(true);
-  updateStatus('Fetching latest data...', false);
+  updateStatus('Syncing...', false);
   
   try {
     const response = await fetch(`${API_BASE}/weather/all`);
-    if (!response.ok) throw new Error('Failed to fetch data');
+    if (!response.ok) throw new Error('Failed to fetch');
     
     weatherData = await response.json();
-    updateStatus('Live data connected', true);
+    updateStatus('Live', true);
     renderAll();
   } catch (error) {
-    console.error('Error fetching data:', error);
-    updateStatus('Connection failed - showing cached data', false);
-    // Use cached data if available
+    console.error('Error:', error);
+    updateStatus('Cached', false);
     if (weatherData) renderAll();
   } finally {
     showLoading(false);
@@ -598,15 +685,24 @@ async function fetchWeatherData() {
 }
 
 function showLoading(show) {
-  document.getElementById('loading').style.display = show ? 'flex' : 'none';
-  document.getElementById('content').style.display = show ? 'none' : 'block';
+  document.getElementById('loading').classList.toggle('active', show);
+  document.getElementById('content').style.display = show ? 'none' : 'flex';
 }
 
 function updateStatus(text, connected) {
   const dot = document.querySelector('.status-dot');
-  const textEl = document.getElementById('statusText');
-  textEl.textContent = text;
+  document.getElementById('statusText').textContent = text;
   dot.style.background = connected ? 'var(--success)' : 'var(--observed)';
+  const bar = document.getElementById('statusBar');
+  if (connected) {
+    bar.style.background = 'rgba(0, 212, 255, 0.1)';
+    bar.style.borderColor = 'rgba(0, 212, 255, 0.3)';
+    bar.style.color = 'var(--accent)';
+  } else {
+    bar.style.background = 'rgba(255, 149, 0, 0.1)';
+    bar.style.borderColor = 'rgba(255, 149, 0, 0.3)';
+    bar.style.color = 'var(--observed)';
+  }
 }
 
 function renderAll() {
@@ -631,23 +727,25 @@ function renderCurrentTemp(data) {
   document.getElementById('currentTime').textContent = 
     date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
   
-  // Calculate 24h high/low from observed + forecast
-  const allTemps = [
-    ...(data.observed || []).map(o => o.v),
-    ...(data.forecast || []).map(f => f.v)
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000;
+  const todayEnd = todayStart + (24 * 60 * 60);
+  
+  const todayTemps = [
+    ...(current.unix_ts >= todayStart && current.unix_ts < todayEnd ? [current.v] : []),
+    ...(data.observed || []).filter(o => o.unix_ts >= todayStart && o.unix_ts < todayEnd).map(o => o.v),
+    ...(data.forecast || []).filter(f => f.unix_ts >= todayStart && f.unix_ts < todayEnd).map(f => f.v)
   ];
   
-  if (allTemps.length > 0) {
-    const high = Math.max(...allTemps);
-    const low = Math.min(...allTemps);
-    document.getElementById('tempHigh').textContent = `${high}°`;
-    document.getElementById('tempLow').textContent = `${low}°`;
+  if (todayTemps.length > 0) {
+    document.getElementById('tempHigh').textContent = `${Math.max(...todayTemps)}°`;
+    document.getElementById('tempLow').textContent = `${Math.min(...todayTemps)}°`;
   }
 }
 
 function renderTempStrip(data) {
   const now = Math.floor(Date.now() / 1000);
-  const twelveHoursAgo = now - (12 * 60 * 60);
+  const fourHoursAgo = now - (4 * 60 * 60);
   const sevenHoursAhead = now + (7 * 60 * 60);
   
   const observed = data.observed || [];
@@ -656,37 +754,31 @@ function renderTempStrip(data) {
   
   const stripItems = [];
   
-  // Get history from last 12 hours (excluding current)
   const historyItems = observed.filter(o => 
-    o.unix_ts >= twelveHoursAgo && 
+    o.unix_ts >= fourHoursAgo && 
     o.unix_ts < (current ? current.unix_ts - 60 : now)
   );
   
-  // Add history items
   historyItems.forEach(item => {
     const date = new Date(item.unix_ts * 1000);
-    const timeStr = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
     stripItems.push({
       type: 'history',
-      time: timeStr,
+      time: date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
       temp: item.v,
       label: 'hist'
     });
   });
   
-  // Add current temperature
   if (current) {
     const date = new Date(current.unix_ts * 1000);
-    const timeStr = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
     stripItems.push({
       type: 'current',
-      time: timeStr,
+      time: date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
       temp: current.v,
       label: 'now'
     });
   }
   
-  // Get forecast for next 7 hours (15-min intervals)
   const forecastItems = forecast.filter(f => 
     f.unix_ts > now && 
     f.unix_ts <= sevenHoursAhead &&
@@ -695,10 +787,9 @@ function renderTempStrip(data) {
   
   forecastItems.forEach(item => {
     const date = new Date(item.unix_ts * 1000);
-    const timeStr = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
     stripItems.push({
       type: 'forecast',
-      time: timeStr,
+      time: date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
       temp: item.v,
       label: 'fc'
     });
@@ -713,7 +804,6 @@ function renderTempStrip(data) {
     </div>
   `).join('');
   
-  // Scroll to current item
   setTimeout(() => {
     const currentEl = container.querySelector('.strip-item.current');
     if (currentEl) {
@@ -733,24 +823,17 @@ function render7HourChart(data) {
   const forecast = data.forecast || [];
   const current = data.current;
   
-  // Get observed from last 4 hours
   const historyData = observed.filter(o => o.unix_ts >= fourHoursAgo && o.unix_ts < now);
-  
-  // Add current as a point
   const currentData = current ? [current] : [];
-  
-  // Get forecast for next 7 hours (15-min intervals)
   const forecastData = forecast.filter(f => 
     f.unix_ts > now && 
     f.unix_ts <= sevenHoursAhead &&
     f.res === '15m'
   );
   
-  // Combine all: history + current + forecast
   const chartData = [...historyData, ...currentData, ...forecastData];
   chartData.sort((a, b) => a.unix_ts - b.unix_ts);
   
-  // Find the index where forecast starts (for the vertical line)
   const currentIdx = chartData.findIndex(d => d === current);
   const splitIdx = currentIdx >= 0 ? currentIdx + 0.5 : chartData.length;
   
@@ -773,8 +856,7 @@ function render7HourChart(data) {
     return '#00d4ff';
   });
   
-  // Create gradient
-  const gradient = ctx.createLinearGradient(0, 0, 0, 280);
+  const gradient = ctx.createLinearGradient(0, 0, 0, 220);
   gradient.addColorStop(0, 'rgba(0, 212, 255, 0.3)');
   gradient.addColorStop(1, 'rgba(0, 212, 255, 0)');
   
@@ -796,8 +878,7 @@ function render7HourChart(data) {
         pointHoverRadius: 7,
         pointBackgroundColor: pointColors,
         pointBorderColor: '#fff',
-        pointBorderWidth: 2,
-        pointHoverBorderWidth: 3
+        pointBorderWidth: 2
       }]
     },
     options: {
@@ -813,16 +894,15 @@ function render7HourChart(data) {
           backgroundColor: 'rgba(10, 14, 26, 0.95)',
           titleColor: '#8892a0',
           bodyColor: '#e8ecf1',
-          bodyFont: { family: 'JetBrains Mono', size: 14 },
-          padding: 12,
+          bodyFont: { family: 'JetBrains Mono', size: 13 },
+          padding: 10,
           borderColor: 'rgba(255,255,255,0.1)',
           borderWidth: 1,
           callbacks: {
             label: (ctx) => `${ctx.parsed.y}°C`,
             title: (items) => {
               const idx = items[0].dataIndex;
-              const type = pointTypes[idx];
-              return `${labels[idx]} — ${type}`;
+              return `${labels[idx]} — ${pointTypes[idx]}`;
             }
           }
         },
@@ -841,10 +921,10 @@ function render7HourChart(data) {
                 position: 'start',
                 backgroundColor: 'rgba(10, 14, 26, 0.8)',
                 color: '#00d4ff',
-                font: { size: 10, family: 'JetBrains Mono' },
-                padding: 4,
+                font: { size: 9, family: 'JetBrains Mono' },
+                padding: 3,
                 xAdjust: 0,
-                yAdjust: -140
+                yAdjust: -110
               }
             }
           }
@@ -853,14 +933,11 @@ function render7HourChart(data) {
       scales: {
         x: {
           grid: { color: 'rgba(255,255,255,0.05)' },
-          ticks: { color: '#8892a0', maxRotation: 45, minRotation: 45 }
+          ticks: { color: '#8892a0', maxRotation: 45, minRotation: 45, font: { size: 10 } }
         },
         y: {
           grid: { color: 'rgba(255,255,255,0.05)' },
-          ticks: { 
-            color: '#8892a0',
-            callback: (val) => `${val}°`
-          }
+          ticks: { color: '#8892a0', callback: (val) => `${val}°`, font: { size: 10 } }
         }
       }
     }
@@ -878,20 +955,14 @@ function render2DayChart(data) {
   const forecast = data.forecast || [];
   const current = data.current;
   
-  // Get observed from last 4 hours
   const historyData = observed.filter(o => o.unix_ts >= fourHoursAgo && o.unix_ts < now);
-  
-  // Add current as a point
   const currentData = current ? [current] : [];
   
-  // Get ALL forecast data for next 48 hours (both 15m and hr)
-  // Prefer 15m where available, use hr for extended forecast
   const allForecast = forecast.filter(f => 
     f.unix_ts > now && 
     f.unix_ts <= twoDaysAhead
   );
   
-  // Deduplicate: prefer 15m over hr at same timestamp
   const forecastMap = new Map();
   allForecast.forEach(f => {
     const existing = forecastMap.get(f.unix_ts);
@@ -900,15 +971,12 @@ function render2DayChart(data) {
     }
   });
   
-  // Convert to array and sort
   const forecastData = Array.from(forecastMap.values());
   forecastData.sort((a, b) => a.unix_ts - b.unix_ts);
   
-  // Combine all: history + current + forecast
   const chartData = [...historyData, ...currentData, ...forecastData];
   chartData.sort((a, b) => a.unix_ts - b.unix_ts);
   
-  // Find the index where forecast starts (for the vertical line)
   const currentIdx = chartData.findIndex(d => d === current);
   const splitIdx = currentIdx >= 0 ? currentIdx + 0.5 : chartData.length;
   
@@ -931,8 +999,7 @@ function render2DayChart(data) {
     return '#667eea';
   });
   
-  // Create gradient
-  const gradient = ctx.createLinearGradient(0, 0, 0, 280);
+  const gradient = ctx.createLinearGradient(0, 0, 0, 220);
   gradient.addColorStop(0, 'rgba(102, 126, 234, 0.3)');
   gradient.addColorStop(1, 'rgba(102, 126, 234, 0)');
   
@@ -954,8 +1021,7 @@ function render2DayChart(data) {
         pointHoverRadius: 7,
         pointBackgroundColor: pointColors,
         pointBorderColor: '#fff',
-        pointBorderWidth: 2,
-        pointHoverBorderWidth: 3
+        pointBorderWidth: 2
       }]
     },
     options: {
@@ -971,18 +1037,17 @@ function render2DayChart(data) {
           backgroundColor: 'rgba(10, 14, 26, 0.95)',
           titleColor: '#8892a0',
           bodyColor: '#e8ecf1',
-          bodyFont: { family: 'JetBrains Mono', size: 14 },
-          padding: 12,
+          bodyFont: { family: 'JetBrains Mono', size: 13 },
+          padding: 10,
           borderColor: 'rgba(255,255,255,0.1)',
           borderWidth: 1,
           callbacks: {
             label: (ctx) => `${ctx.parsed.y}°C`,
             title: (items) => {
               const idx = items[0].dataIndex;
-              const type = pointTypes[idx];
               const point = chartData[idx];
               const res = point.res ? `(${point.res})` : '';
-              return `${labels[idx]} — ${type} ${res}`;
+              return `${labels[idx]} — ${pointTypes[idx]} ${res}`;
             }
           }
         },
@@ -1001,10 +1066,10 @@ function render2DayChart(data) {
                 position: 'start',
                 backgroundColor: 'rgba(10, 14, 26, 0.8)',
                 color: '#667eea',
-                font: { size: 10, family: 'JetBrains Mono' },
-                padding: 4,
+                font: { size: 9, family: 'JetBrains Mono' },
+                padding: 3,
                 xAdjust: 0,
-                yAdjust: -140
+                yAdjust: -110
               }
             }
           }
@@ -1013,21 +1078,17 @@ function render2DayChart(data) {
       scales: {
         x: {
           grid: { color: 'rgba(255,255,255,0.05)' },
-          ticks: { color: '#8892a0', maxRotation: 45, minRotation: 45 }
+          ticks: { color: '#8892a0', maxRotation: 45, minRotation: 45, font: { size: 10 } }
         },
         y: {
           grid: { color: 'rgba(255,255,255,0.05)' },
-          ticks: { 
-            color: '#8892a0',
-            callback: (val) => `${val}°`
-          }
+          ticks: { color: '#8892a0', callback: (val) => `${val}°`, font: { size: 10 } }
         }
       }
     }
   });
 }
 
-// Auto-refresh every 3 minutes
 setInterval(() => {
   fetchWeatherData();
 }, 180000);
