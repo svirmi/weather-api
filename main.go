@@ -401,7 +401,7 @@ func main() {
 		apiKey = "e1f10a1e78da46f5b10a1e78da96f525"
 	}
 
-	ids := []string{"RJTT", "LLBG", "LFPG", "EGLC", "LTAC", "EPWA", "CYYZ", "ZBAA", "ZHHH", "UUWW", "ZUCK", "WSSS"}
+	ids := []string{"RJTT", "LLBG", "LFPG", "EGLC", "LTAC", "EPWA", "CYYZ", "ZBAA", "ZHHH", "UUWW", "ZUCK", "WSSS", "EFHK"}
 	registry := &WeatherRegistry{
 		Locations: make(map[string]*LocationStore),
 		ApiKey:    apiKey,
