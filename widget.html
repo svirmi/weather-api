@@ -61,14 +61,15 @@ body {
 }
 
 .sidebar {
-  width: 140px;
+  width: 260px;
   flex-shrink: 0;
   background: rgba(20, 25, 40, 0.9);
   border-left: 1px solid var(--border);
   padding: 12px 10px;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 6px;
+  align-content: start;
   height: 100vh;
   overflow-y: auto;
 }
@@ -81,6 +82,7 @@ body {
   -webkit-text-fill-color: transparent;
   background-clip: text;
   text-align: center;
+  grid-column: 1 / -1;
   margin-bottom: 6px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -625,19 +627,20 @@ body {
 <script>
 const API_BASE = 'https://p01--weather-api--cn5bkwlzyqr9.code.run';
 const LOCATIONS = {
-  'CYYZ': 'Toronto',
-  'EGLC': 'London',
-  'EPWA': 'Warsaw',
-  'LFPG': 'Paris',
-  'LLBG': 'Tel Aviv',
   'LTAC': 'Ankara',
-  'RJTT': 'Tokyo',
   'ZBAA': 'Beijing',
-  'ZHHH': 'Wuhan',
-  'UUWW': 'Moscow',
   'ZUCK': 'Chongqing',
+  'EFHK': 'Helsinki',
+  'EGLC': 'London',
+  'UUWW': 'Moscow',
+  'LFPG': 'Paris',
+  'RCSS': 'Taipei Songshan Airport',
   'WSSS': 'Singapore',
-  'EFHK': 'Helsinki'
+  'LLBG': 'Tel Aviv',
+  'CYYZ': 'Toronto',
+  'RJTT': 'Tokyo',
+  'EPWA': 'Warsaw',
+  'ZHHH': 'Wuhan',
 };
 
 
