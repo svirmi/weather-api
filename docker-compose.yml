@@ -23,7 +23,7 @@ services:
       SYMBOLS: XPTUSDT,XPDUSDT,XAUUSDT,XAGUSDT
     command: ["bootstrap"]
     ports:
-      - "127.0.0.1:9090:9090"
+      - "9090:9090"
     restart: unless-stopped
     stop_grace_period: 30s
     init: true

@@ -12,6 +12,12 @@ docker compose logs -f collector
 `bootstrap` runs migrations, ensures partitions, then starts the pipeline.
 The container is distroless: no shell, no curl. All probes use the binary.
 
+Port 9090 is published on all host interfaces (`"9090:9090"`), so `/healthz`
+and `/metrics` are reachable from the Northflank ingress. The metrics are
+non-sensitive operational counters. Northflank terminates TLS at the edge and
+routes plain HTTP to container port 9090, so the public URL is
+`https://<generated-host>/metrics` — do **not** append `:9090` to it.
+
 ## Verification
 
 ```
