@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Metric is a counter or gauge with a fixed label set.
@@ -19,12 +20,27 @@ type Metric struct {
 	labels map[string]string
 	kind   string
 	value  atomic.Int64
+	scale  atomic.Int64 // >1 renders value/scale as a float (e.g. nanoseconds -> seconds)
 }
 
 func (m *Metric) Add(delta int64) { m.value.Add(delta) }
 func (m *Metric) Inc()            { m.Add(1) }
-func (m *Metric) Set(v int64)     { m.value.Store(v) }
+func (m *Metric) Set(v int64)     { m.scale.Store(0); m.value.Store(v) }
 func (m *Metric) Get() int64      { return m.value.Load() }
+
+// SetNanos stores a duration in nanoseconds rendered as seconds.
+func (m *Metric) SetNanos(ns int64) {
+	m.scale.Store(int64(time.Second))
+	m.value.Store(ns)
+}
+
+func (m *Metric) format() string {
+	v := m.value.Load()
+	if scale := m.scale.Load(); scale > 1 {
+		return strconv.FormatFloat(float64(v)/float64(scale), 'f', -1, 64)
+	}
+	return strconv.FormatInt(v, 10)
+}
 
 // Registry stores named, labelled metrics and renders them in Prometheus
 // text exposition format.
@@ -105,7 +121,7 @@ func (r *Registry) Render() string {
 			b.WriteByte('}')
 		}
 		b.WriteByte(' ')
-		b.WriteString(strconv.FormatInt(m.value.Load(), 10))
+		b.WriteString(m.format())
 		b.WriteByte('\n')
 	}
 	return b.String()

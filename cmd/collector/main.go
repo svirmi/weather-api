@@ -16,9 +16,12 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"metals-collector/internal/binance"
 	"metals-collector/internal/config"
+	"metals-collector/internal/coordinator"
 	"metals-collector/internal/migrate"
 	"metals-collector/internal/ops"
+	"metals-collector/internal/session"
 	"metals-collector/internal/store"
 )
 
@@ -105,29 +108,90 @@ func serve(_ []string, doMigrate bool, log *slog.Logger) error {
 		return fmt.Errorf("start ops server: %w", err)
 	}
 
-	mgrDone := make(chan struct{})
+	client := binance.NewClient(cfg.BinanceBaseURL, cfg.HTTPTimeout, reg, log)
+	if err := binance.AssertStartup(ctx, client, cfg.Symbols, cfg.WeightBudget(), log); err != nil {
+		return fmt.Errorf("startup assertions: %w", err)
+	}
+
+	pipelineCtx, cancelPipeline := context.WithCancel(ctx)
+	defer cancelPipeline()
+	capacity := cfg.BufferMaxMinutes * 60 * len(cfg.Symbols)
+	writer := store.NewWriter(pool, mgr, cfg.FlushInterval, capacity, reg, log)
+	coord := coordinator.New(cfg, client, writer.In(), reg, log)
+
+	coordDone, writerDone := make(chan struct{}), make(chan struct{})
+	sessionDone, clockDone, mgrDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(coordDone)
+		if err := coord.Run(pipelineCtx); err != nil {
+			log.Error("coordinator stopped", "err", err)
+		}
+	}()
+	go func() { defer close(writerDone); writer.Run(pipelineCtx) }()
+	go func() {
+		defer close(sessionDone)
+		if err := session.Run(pipelineCtx, client, pool, log); err != nil {
+			log.Error("session poller stopped", "err", err)
+		}
+	}()
+	go func() { defer close(clockDone); runClock(pipelineCtx, client, reg, log) }()
 	go func() {
 		defer close(mgrDone)
-		if err := mgr.Run(ctx, time.Hour); err != nil && ctx.Err() == nil {
+		if err := mgr.Run(pipelineCtx, time.Hour); err != nil && pipelineCtx.Err() == nil {
 			log.Error("partition manager stopped", "err", err)
 		}
 	}()
 
-	log.Info("collector ready; polling pipeline is enabled in M2")
+	log.Info("collector ready")
 	<-ctx.Done()
 
 	log.Info("shutdown: stopping intake")
+	cancelPipeline()
 	opsSrv.SetHealthy(false)
+	<-coordDone // in-flight HTTP is bounded by HTTP_TIMEOUT_MS
+	<-writerDone
+	<-sessionDone
+	<-clockDone
 	<-mgrDone
 
-	// Final work must use a fresh context: ctx is already cancelled.
+	// Final flush must use a fresh context: ctx is already cancelled.
 	fctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	if err := writer.Stop(fctx); err != nil {
+		log.Error("final flush failed", "err", err, "buffered", writer.Buffered())
+	}
 	if err := opsSrv.Shutdown(fctx); err != nil {
 		log.Error("ops shutdown failed", "err", err)
 	}
-	log.Info("shutdown complete")
+	log.Info("shutdown complete", "buffered", writer.Buffered())
 	return nil
+}
+
+func runClock(ctx context.Context, client *binance.Client, reg *ops.Registry, log *slog.Logger) {
+	gauge := reg.Gauge("clock_drift_ms", nil)
+	check := func() {
+		serverMS, err := client.ServerTime(ctx)
+		if err != nil {
+			log.Warn("clock check failed", "err", err)
+			return
+		}
+		drift := serverMS - time.Now().UnixMilli()
+		gauge.Set(drift)
+		if drift > 1000 || drift < -1000 {
+			log.Warn("clock drift above 1s", "drift_ms", drift)
+		}
+	}
+	check()
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			check()
+		}
+	}
 }
 
 func registerMetrics(cfg *config.Config) *ops.Registry {
@@ -143,6 +207,8 @@ func registerMetrics(cfg *config.Config) *ops.Registry {
 	reg.Counter("inserted_rows_total", nil)
 	reg.Gauge("db_flush_seconds", nil)
 	reg.Gauge("cycle_skew_ms", nil)
+	reg.Gauge("cycle_fetch_skew_ms", nil)
+	reg.Gauge("clock_drift_ms", nil)
 	return reg
 }
 
