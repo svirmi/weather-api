@@ -51,6 +51,22 @@ failure. `cycle_fetch_skew_ms` is the sampling-comparability metric;
 `cycle_skew_ms` is exchange-time skew and is informational (XPTUSDT quotes can
 be ~75 s stale). See `RUNBOOK.md`.
 
+## Deployment
+
+Locally the whole pilot is `docker compose up -d --build` (PostgreSQL +
+collector). Northflank does not execute `docker compose`, so `northflank.json`
+describes the equivalent two-container stack as a GitOps template:
+
+- `postgres` — `postgres:16-alpine` with a persistent volume, private port 5432.
+- `collector` — built from this repo's Dockerfile on `main`, public HTTP port 9090.
+
+One-time setup in Northflank: create a template linked to this repository,
+branch `main`, path `/northflank.json`, enable GitOps and "run automatically
+when the template is updated", then set the `PROJECT_ID` argument override to
+the target project ID. Optional: override `DB_PASSWORD` (default `collector`).
+After that, every push to `main` re-runs the template and redeploys both
+containers. See `RUNBOOK.md` for details.
+
 ## Status
 
 - [x] M1 — schema, migrations, partitions, config, ops endpoints, compose

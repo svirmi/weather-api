@@ -93,6 +93,33 @@ ops and the pool. `stop_grace_period: 30s` covers the worst case.
 `docker compose kill -s SIGKILL collector` loses at most one flush window
 (≤2 s) but must not create duplicates (PK on `ts_sec, symbol`).
 
+## Remote deployment (Northflank)
+
+Northflank does not run `docker compose`; `northflank.json` is the equivalent
+GitOps template. It creates/updates two containers:
+
+- `postgres` — `postgres:16-alpine`, 6 GB `ReadWriteOnce` volume mounted at
+  `/var/lib/postgresql/data`, private TCP port 5432.
+- `collector` — built from `Dockerfile` on branch `main`, public HTTP port 9090,
+  `DB_DSN` pointing at `postgres:5432` (project-internal DNS).
+
+One-time setup:
+
+1. Create a template in Northflank, link this repository/branch `main`, path
+   `/northflank.json`.
+2. Enable GitOps and **run automatically when the template is updated**.
+3. Set the `PROJECT_ID` argument override to the target project ID.
+4. Optionally override `DB_PASSWORD` (pilot default is `collector`).
+
+Then every push to `main` runs the template: the DB container is updated in
+place (its volume is preserved) and the collector is rebuilt with cache
+disabled and redeployed. Build cache is deliberately off because a stale
+binary previously survived a deploy.
+
+The binary defaults to the `run` subcommand, which now self-migrates, so no
+platform command override is needed. `DATABASE_URL` is accepted as an alias
+for `DB_DSN` if a platform injects that name instead.
+
 ## Live pilot (T9)
 
 ```

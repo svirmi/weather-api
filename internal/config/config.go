@@ -32,9 +32,13 @@ type Config struct {
 // Load reads configuration from the environment. requireDSN is false for
 // subcommands that do not touch PostgreSQL (e.g. healthcheck).
 func Load(requireDSN bool) (*Config, error) {
+	dsn := os.Getenv("DB_DSN")
+	if dsn == "" {
+		dsn = os.Getenv("DATABASE_URL") // common managed-platform alias
+	}
 	c := &Config{
 		BinanceBaseURL: os.Getenv("BINANCE_BASE_URL"),
-		DBDSN:          os.Getenv("DB_DSN"),
+		DBDSN:          dsn,
 		MetricsAddr:    os.Getenv("METRICS_ADDR"),
 		LogLevel:       os.Getenv("LOG_LEVEL"),
 	}
