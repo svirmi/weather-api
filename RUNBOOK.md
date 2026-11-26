@@ -96,22 +96,22 @@ ops and the pool. `stop_grace_period: 30s` covers the worst case.
 ## Remote deployment (Northflank)
 
 Northflank does not run `docker compose`; `northflank.json` is a GitOps
-template that deploys only the collector container. PostgreSQL is the
-Northflank managed Postgres addon, not a container managed by this template.
+template describing the remote pilot:
 
-One-time setup:
+1. A project (`weather api`, `europe-west`) and a PostgreSQL 16 addon (`pg-1`,
+   TLS enabled, 6 GB storage).
+2. A secret group that maps the addon's `POSTGRES_URI` to `DB_DSN`. Credentials
+   live only in Northflank — never in this repository.
+3. A combined service (`weather-api`) built from this repo on `main`, public
+   HTTP port 9090, 1 instance, CI enabled, build cache disabled.
 
-1. Create a template in Northflank, link this repository/branch `main`, path
-   `/northflank.json`.
-2. Enable GitOps and **run automatically when the template is updated**.
-3. Set argument overrides (secure on Northflank, never committed here):
-   - `PROJECT_ID` — target project ID.
-   - `DB_DSN` — the addon `POSTGRES_URI` with `sslmode=require`.
+One-time setup: create a template linked to this repository/branch `main`, path
+`/northflank.json`, enable GitOps and **run automatically when the template is
+updated**. Pushes to `main` rebuild and redeploy the collector; the collector's
+`run` subcommand self-migrates a fresh addon database automatically.
 
-Then every push to `main` rebuilds the collector with cache disabled and
-redeploys it against that database. Build cache is deliberately off because a
-stale binary previously survived a deploy. The collector's `run` subcommand
-self-migrates, so a fresh addon database is initialised automatically.
+If you no longer want a template, disable GitOps in Northflank **before**
+deleting `northflank.json`.
 
 The binary defaults to the `run` subcommand, which now self-migrates, so no
 platform command override is needed. `DATABASE_URL` is accepted as an alias

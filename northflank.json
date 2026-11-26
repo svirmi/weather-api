@@ -1,11 +1,7 @@
 {
+  "name": "weather api",
+  "description": "Metals L1 collector pilot: PostgreSQL addon + collector service, auto-deployed from main.",
   "apiVersion": "v1.2",
-  "name": "metals-collector-pilot",
-  "description": "Deploys the metals L1 collector container on pushes to main. PostgreSQL is the Northflank managed addon, supplied via the DB_DSN argument override.",
-  "arguments": {
-    "PROJECT_ID": "",
-    "DB_DSN": ""
-  },
   "options": {
     "autorun": true,
     "runOnUpdate": true,
@@ -17,80 +13,158 @@
       "type": "sequential",
       "steps": [
         {
-          "kind": "CombinedService",
-          "ref": "collector",
+          "ref": "project",
+          "kind": "Project",
           "spec": {
-            "name": "collector",
-            "projectId": "${args.PROJECT_ID}",
-            "billing": {
-              "deploymentPlan": "nf-compute-10",
-              "buildPlan": "nf-compute-400-16"
-            },
-            "deployment": {
-              "instances": 1,
-              "storage": {
-                "ephemeralStorage": {
-                  "storageSize": 1024
-                },
-                "shmSize": 64
-              },
-              "docker": {
-                "configType": "default"
-              },
-              "gracePeriodSeconds": 30
-            },
-            "runtimeEnvironment": {
-              "DB_DSN": "${args.DB_DSN}",
-              "SYMBOLS": "XPTUSDT,XPDUSDT,XAUUSDT,XAGUSDT",
-              "LOG_LEVEL": "info"
-            },
-            "vcsData": {
-              "projectType": "github",
-              "projectUrl": "https://github.com/svirmi/weather-api.git",
-              "projectBranch": "main"
-            },
-            "ports": [
-              {
-                "internalPort": 9090,
-                "protocol": "HTTP",
-                "name": "p01",
-                "public": true,
-                "domains": [],
-                "security": {
-                  "policies": [],
-                  "credentials": []
-                },
-                "disableNfDomain": false
+            "name": "weather api",
+            "color": "#57637A",
+            "networking": {
+              "allowedIngressProjects": [],
+              "hostAliases": {
+                "enabled": false
               }
-            ],
-            "buildSettings": {
-              "dockerfile": {
-                "buildEngine": "buildkit",
-                "dockerWorkDir": "/",
-                "dockerFilePath": "/Dockerfile",
-                "buildkit": {
-                  "useCache": false,
-                  "cacheStorageSize": 16384
+            },
+            "region": "europe-west"
+          }
+        },
+        {
+          "kind": "Workflow",
+          "spec": {
+            "context": {
+              "projectId": "${refs.project.id}"
+            },
+            "type": "sequential",
+            "steps": [
+              {
+                "ref": "pg",
+                "kind": "Addon",
+                "spec": {
+                  "name": "pg-1",
+                  "infrastructure": {
+                    "architecture": "x86"
+                  },
+                  "type": "postgresql",
+                  "version": "16",
+                  "billing": {
+                    "deploymentPlan": "nf-compute-20",
+                    "storageClass": "nvme",
+                    "storage": 6144,
+                    "replicas": 1
+                  },
+                  "tlsEnabled": true
                 }
-              }
-            },
-            "disabledCI": false,
-            "buildConfiguration": {
-              "pathIgnoreRules": [],
-              "isAllowList": false,
-              "ciIgnoreFlagsEnabled": false
-            },
-            "healthChecks": [
+              },
               {
-                "protocol": "HTTP",
-                "type": "livenessProbe",
-                "path": "/healthz",
-                "port": 9090,
-                "initialDelaySeconds": 15,
-                "periodSeconds": 30,
-                "timeoutSeconds": 3,
-                "failureThreshold": 3,
-                "successThreshold": 1
+                "kind": "SecretGroup",
+                "spec": {
+                  "name": "API-KEYS",
+                  "type": "secret",
+                  "secretType": "environment-arguments",
+                  "priority": 10,
+                  "secrets": {
+                    "variables": {},
+                    "files": {}
+                  },
+                  "addonDependencies": [
+                    {
+                      "addonId": "${refs.pg.id}",
+                      "keys": [
+                        {
+                          "keyName": "POSTGRES_URI",
+                          "aliases": ["DB_DSN"]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "kind": "Condition",
+                "spec": {
+                  "kind": "Addon",
+                  "spec": {
+                    "data": {
+                      "addonId": "${refs.pg.id}"
+                    },
+                    "type": "running"
+                  }
+                }
+              },
+              {
+                "kind": "CombinedService",
+                "spec": {
+                  "name": "weather-api",
+                  "infrastructure": {
+                    "architecture": "x86"
+                  },
+                  "billing": {
+                    "buildPlan": "nf-compute-400-16",
+                    "deploymentPlan": "nf-compute-10"
+                  },
+                  "deployment": {
+                    "type": "deployment",
+                    "instances": 1,
+                    "gracePeriodSeconds": 30,
+                    "docker": {
+                      "configType": "default"
+                    }
+                  },
+                  "ports": [
+                    {
+                      "name": "p01",
+                      "internalPort": 9090,
+                      "protocol": "HTTP",
+                      "public": true
+                    }
+                  ],
+                  "loadBalancing": {
+                    "mode": "leastConnection"
+                  },
+                  "buildSource": "git",
+                  "disabledCI": false,
+                  "vcsData": {
+                    "projectUrl": "https://github.com/svirmi/weather-api",
+                    "projectType": "github",
+                    "projectBranch": "main",
+                    "accountLogin": "svirmi"
+                  },
+                  "buildSettings": {
+                    "dockerfile": {
+                      "buildEngine": "buildkit",
+                      "dockerFilePath": "/Dockerfile",
+                      "dockerWorkDir": "/",
+                      "buildkit": {
+                        "useCache": false,
+                        "cacheStorageSize": 16384
+                      },
+                      "scan": {
+                        "enabled": false
+                      }
+                    },
+                    "storage": {
+                      "ephemeralStorage": {
+                        "storageSize": 16384
+                      }
+                    }
+                  },
+                  "runtimeEnvironment": {
+                    "SYMBOLS": "XPTUSDT,XPDUSDT,XAUUSDT,XAGUSDT",
+                    "LOG_LEVEL": "info"
+                  },
+                  "healthChecks": [
+                    {
+                      "protocol": "HTTP",
+                      "type": "livenessProbe",
+                      "path": "/healthz",
+                      "port": 9090,
+                      "initialDelaySeconds": 15,
+                      "periodSeconds": 30,
+                      "timeoutSeconds": 3,
+                      "failureThreshold": 3,
+                      "successThreshold": 1
+                    }
+                  ]
+                }
               }
             ]
           }
