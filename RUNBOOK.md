@@ -10,6 +10,8 @@ docker compose logs -f collector
 ```
 
 `bootstrap` runs migrations, ensures partitions, then starts the pipeline.
+Calling the binary with no subcommand defaults to `run`, which also migrates,
+so platforms that launch the image with no arguments still self-initialise.
 The container is distroless: no shell, no curl. All probes use the binary.
 
 Port 9090 is published on all host interfaces (`"9090:9090"`), so `/healthz`

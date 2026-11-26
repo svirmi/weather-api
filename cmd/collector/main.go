@@ -35,24 +35,27 @@ func main() {
 		cmd = os.Args[1]
 	}
 
+	args := subcommandArgs()
 	var err error
 	switch cmd {
 	case "bootstrap":
-		err = serve(os.Args[2:], true, logger)
+		err = serve(args, true, logger)
 	case "run":
-		err = serve(os.Args[2:], false, logger)
+		// The default invocation must self-initialise: platforms that use the
+		// Dockerfile ENTRYPOINT without a CMD pass no subcommand at all.
+		err = serve(args, true, logger)
 	case "migrate":
-		err = migrateCommand(os.Args[2:], logger)
+		err = migrateCommand(args, logger)
 	case "healthcheck":
-		err = healthcheckCommand(os.Args[2:], logger)
+		err = healthcheckCommand(args, logger)
 	case "retention":
-		err = retentionCommand(os.Args[2:], logger)
+		err = retentionCommand(args, logger)
 	case "fake":
-		err = fakeCommand(os.Args[2:], logger)
+		err = fakeCommand(args, logger)
 	case "verify":
-		err = verifyCommand(os.Args[2:], logger)
+		err = verifyCommand(args, logger)
 	case "report":
-		err = reportCommand(os.Args[2:], logger)
+		err = reportCommand(args, logger)
 	default:
 		err = fmt.Errorf("unknown subcommand %q (want bootstrap|run|migrate|healthcheck|retention|fake|verify|report)", cmd)
 	}
@@ -60,6 +63,15 @@ func main() {
 		logger.Error("command failed", "command", cmd, "err", err)
 		os.Exit(1)
 	}
+}
+
+// subcommandArgs returns the arguments after the subcommand. It is safe when
+// the platform invokes the binary with no arguments at all.
+func subcommandArgs() []string {
+	if len(os.Args) > 2 {
+		return os.Args[2:]
+	}
+	return nil
 }
 
 func newLogger() *slog.Logger {
