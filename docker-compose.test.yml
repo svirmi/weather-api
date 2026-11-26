@@ -1,8 +1,15 @@
 services:
   fake:
     build: .
-    command: ["fake", "--addr=:8080", "--scenario=normal"]
+    command: ["fake", "--addr=:8080", "--scenario=${FAKE_SCENARIO:-normal}"]
+    environment:
+      SYMBOLS: ${SYMBOLS:-XPTUSDT,XPDUSDT,XAUUSDT,XAGUSDT}
+
   collector:
+    depends_on:
+      fake:
+        condition: service_started
     environment:
       BINANCE_BASE_URL: http://fake:8080
       RETENTION_DAYS: "45"
+      SYMBOLS: ${SYMBOLS:-XPTUSDT,XPDUSDT,XAUUSDT,XAGUSDT}

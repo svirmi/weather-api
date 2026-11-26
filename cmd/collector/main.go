@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -19,10 +20,12 @@ import (
 	"metals-collector/internal/binance"
 	"metals-collector/internal/config"
 	"metals-collector/internal/coordinator"
+	"metals-collector/internal/fake"
 	"metals-collector/internal/migrate"
 	"metals-collector/internal/ops"
 	"metals-collector/internal/session"
 	"metals-collector/internal/store"
+	"metals-collector/internal/verify"
 )
 
 func main() {
@@ -44,8 +47,12 @@ func main() {
 		err = healthcheckCommand(os.Args[2:], logger)
 	case "retention":
 		err = retentionCommand(os.Args[2:], logger)
-	case "fake", "verify", "report":
-		err = fmt.Errorf("subcommand %q is delivered in M3", cmd)
+	case "fake":
+		err = fakeCommand(os.Args[2:], logger)
+	case "verify":
+		err = verifyCommand(os.Args[2:], logger)
+	case "report":
+		err = reportCommand(os.Args[2:], logger)
 	default:
 		err = fmt.Errorf("unknown subcommand %q (want bootstrap|run|migrate|healthcheck|retention|fake|verify|report)", cmd)
 	}
@@ -109,8 +116,21 @@ func serve(_ []string, doMigrate bool, log *slog.Logger) error {
 	}
 
 	client := binance.NewClient(cfg.BinanceBaseURL, cfg.HTTPTimeout, reg, log)
-	if err := binance.AssertStartup(ctx, client, cfg.Symbols, cfg.WeightBudget(), log); err != nil {
-		return fmt.Errorf("startup assertions: %w", err)
+	var startupErr error
+	for attempt := 0; attempt < 15; attempt++ {
+		startupErr = binance.AssertStartup(ctx, client, cfg.Symbols, cfg.WeightBudget(), log)
+		if startupErr == nil {
+			break
+		}
+		log.Warn("startup assertions failed; retrying", "attempt", attempt+1, "err", startupErr)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
+	if startupErr != nil {
+		return fmt.Errorf("startup assertions: %w", startupErr)
 	}
 
 	pipelineCtx, cancelPipeline := context.WithCancel(ctx)
@@ -284,4 +304,115 @@ func retentionCommand(args []string, log *slog.Logger) error {
 	}
 	log.Info("retention complete", "retention_days", cfg.RetentionDays)
 	return nil
+}
+
+func fakeCommand(args []string, log *slog.Logger) error {
+	fs := flag.NewFlagSet("fake", flag.ContinueOnError)
+	addr := fs.String("addr", ":8080", "listen address")
+	scenario := fs.String("scenario", "normal", "fault scenario")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	scenarioName, err := fake.ParseScenario(*scenario)
+	if err != nil {
+		return err
+	}
+	cfg, err := config.Load(false)
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	return fake.Run(ctx, *addr, scenarioName, cfg.Symbols, log)
+}
+
+func verifyCommand(args []string, _ *slog.Logger) error {
+	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
+	windowSec := fs.Int("window-sec", 180, "verification window in seconds")
+	fixtures := fs.Bool("fixtures", false, "check prices against built-in fixtures")
+	pauseSec := fs.Int("pause-sec", 0, "seconds excluded for ban pauses")
+	metricsURL := fs.String("metrics-url", "", "collector metrics URL")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	cfg, err := config.Load(true)
+	if err != nil {
+		return err
+	}
+	pool, ctx, closeFn, err := poolForCommand(cfg)
+	if err != nil {
+		return err
+	}
+	defer closeFn()
+	opts := verify.Options{
+		Window:        time.Duration(*windowSec) * time.Second,
+		Fixtures:      *fixtures,
+		PauseSec:      *pauseSec,
+		MetricsURL:    metricsAddr(*metricsURL, cfg.MetricsAddr),
+		AheadDays:     cfg.PartitionAheadDays,
+		RetentionDays: cfg.RetentionDays,
+		SkewMaxMS:     cfg.SkewMaxMS,
+	}
+	if !verify.Run(ctx, pool, cfg, opts, os.Stdout) {
+		return fmt.Errorf("verification failed")
+	}
+	return nil
+}
+
+func reportCommand(args []string, _ *slog.Logger) error {
+	fs := flag.NewFlagSet("report", flag.ContinueOnError)
+	windowSec := fs.Int("window-sec", 180, "report window in seconds")
+	metricsURL := fs.String("metrics-url", "", "collector metrics URL")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	cfg, err := config.Load(true)
+	if err != nil {
+		return err
+	}
+	pool, ctx, closeFn, err := poolForCommand(cfg)
+	if err != nil {
+		return err
+	}
+	defer closeFn()
+	opts := verify.Options{
+		Window:        time.Duration(*windowSec) * time.Second,
+		MetricsURL:    metricsAddr(*metricsURL, cfg.MetricsAddr),
+		AheadDays:     cfg.PartitionAheadDays,
+		RetentionDays: cfg.RetentionDays,
+		SkewMaxMS:     cfg.SkewMaxMS,
+	}
+	if !verify.Report(ctx, pool, cfg, opts, os.Stdout) {
+		return fmt.Errorf("report thresholds not met")
+	}
+	return nil
+}
+
+func poolForCommand(cfg *config.Config) (*pgxpool.Pool, context.Context, func(), error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	pool, err := pgxpool.New(ctx, cfg.DBDSN)
+	if err != nil {
+		cancel()
+		return nil, nil, nil, err
+	}
+	if err := pool.Ping(ctx); err != nil {
+		cancel()
+		pool.Close()
+		return nil, nil, nil, err
+	}
+	return pool, ctx, func() { cancel(); pool.Close() }, nil
+}
+
+func metricsAddr(override, listenAddr string) string {
+	if override != "" {
+		return override
+	}
+	host, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		return "http://127.0.0.1:9090/metrics"
+	}
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/metrics"
 }

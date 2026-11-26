@@ -37,11 +37,23 @@ Environment variables only. Defaults:
 ## Subcommands
 
 `bootstrap`, `run`, `migrate`, `healthcheck`, `retention --once`,
-`fake`, `verify`, `report`. The last three are delivered in M3.
+`fake`, `verify`, `report`. All are implemented.
+
+## Verification
+
+```
+docker compose exec -T collector /collector verify --window-sec=180 --fixtures
+./scripts/test.sh
+```
+
+`verify` runs the eight checks from the design doc and exits non-zero on any
+failure. `cycle_fetch_skew_ms` is the sampling-comparability metric;
+`cycle_skew_ms` is exchange-time skew and is informational (XPTUSDT quotes can
+be ~75 s stale). See `RUNBOOK.md`.
 
 ## Status
 
 - [x] M1 — schema, migrations, partitions, config, ops endpoints, compose
-- [ ] M2 — polling pipeline, writer, retry buffer, graceful shutdown
-- [ ] M3 — fake, verify, test driver
-- [ ] M4 — 24 h live pilot and runbook
+- [x] M2 — polling pipeline, writer, retry buffer, graceful shutdown
+- [x] M3 — fake scenarios, verify, report, T1–T8 driver (all green in quick mode)
+- [ ] M4 — 24 h live pilot (T9) — runbook ready; pilot not yet executed
