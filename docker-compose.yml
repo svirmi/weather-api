@@ -1,0 +1,32 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: collector
+      POSTGRES_PASSWORD: collector
+      POSTGRES_DB: collector
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U collector -d collector"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  collector:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_DSN: postgres://collector:collector@db:5432/collector?sslmode=disable
+      SYMBOLS: XPTUSDT,XPDUSDT,XAUUSDT,XAGUSDT
+    command: ["bootstrap"]
+    ports:
+      - "127.0.0.1:9090:9090"
+    restart: unless-stopped
+    stop_grace_period: 30s
+    init: true
+
+volumes:
+  pgdata:

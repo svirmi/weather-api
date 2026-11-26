@@ -1,0 +1,8 @@
+services:
+  fake:
+    build: .
+    command: ["fake", "--addr=:8080", "--scenario=normal"]
+  collector:
+    environment:
+      BINANCE_BASE_URL: http://fake:8080
+      RETENTION_DAYS: "45"
