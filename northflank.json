@@ -1,10 +1,10 @@
 {
   "apiVersion": "v1.2",
   "name": "metals-collector-pilot",
-  "description": "Pilot stack: PostgreSQL 16 and the metals L1 collector, both in containers. Push to main runs this template.",
+  "description": "Deploys the metals L1 collector container on pushes to main. PostgreSQL is the Northflank managed addon, supplied via the DB_DSN argument override.",
   "arguments": {
     "PROJECT_ID": "",
-    "DB_PASSWORD": "collector"
+    "DB_DSN": ""
   },
   "options": {
     "autorun": true,
@@ -16,81 +16,6 @@
     "spec": {
       "type": "sequential",
       "steps": [
-        {
-          "kind": "DeploymentService",
-          "ref": "postgres",
-          "spec": {
-            "name": "postgres",
-            "projectId": "${args.PROJECT_ID}",
-            "billing": {
-              "deploymentPlan": "nf-compute-50"
-            },
-            "deployment": {
-              "type": "statefulSet",
-              "instances": 1,
-              "external": {
-                "imagePath": "postgres:16-alpine"
-              },
-              "docker": {
-                "configType": "default"
-              },
-              "gracePeriodSeconds": 30,
-              "volumes": [
-                {
-                  "id": "pgdata",
-                  "mounts": [
-                    {
-                      "containerMountPath": "/var/lib/postgresql/data"
-                    }
-                  ],
-                  "spec": {
-                    "accessMode": "ReadWriteOnce",
-                    "storageClassName": "nvme",
-                    "storageSize": 6144
-                  }
-                }
-              ]
-            },
-            "runtimeEnvironment": {
-              "POSTGRES_USER": "collector",
-              "POSTGRES_PASSWORD": "${args.DB_PASSWORD}",
-              "POSTGRES_DB": "collector"
-            },
-            "ports": [
-              {
-                "name": "pg",
-                "internalPort": 5432,
-                "protocol": "TCP",
-                "public": false,
-                "vpcAccessible": false
-              }
-            ],
-            "healthChecks": [
-              {
-                "protocol": "CMD",
-                "type": "livenessProbe",
-                "cmd": "pg_isready -U collector -d collector",
-                "initialDelaySeconds": 10,
-                "periodSeconds": 10,
-                "timeoutSeconds": 3,
-                "failureThreshold": 5,
-                "successThreshold": 1
-              }
-            ]
-          }
-        },
-        {
-          "kind": "Condition",
-          "spec": {
-            "kind": "Service",
-            "spec": {
-              "data": {
-                "serviceId": "${refs.postgres.id}"
-              },
-              "type": "running"
-            }
-          }
-        },
         {
           "kind": "CombinedService",
           "ref": "collector",
@@ -115,7 +40,7 @@
               "gracePeriodSeconds": 30
             },
             "runtimeEnvironment": {
-              "DB_DSN": "postgres://collector:${args.DB_PASSWORD}@postgres:5432/collector?sslmode=disable",
+              "DB_DSN": "${args.DB_DSN}",
               "SYMBOLS": "XPTUSDT,XPDUSDT,XAUUSDT,XAGUSDT",
               "LOG_LEVEL": "info"
             },

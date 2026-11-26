@@ -95,26 +95,23 @@ ops and the pool. `stop_grace_period: 30s` covers the worst case.
 
 ## Remote deployment (Northflank)
 
-Northflank does not run `docker compose`; `northflank.json` is the equivalent
-GitOps template. It creates/updates two containers:
-
-- `postgres` — `postgres:16-alpine`, 6 GB `ReadWriteOnce` volume mounted at
-  `/var/lib/postgresql/data`, private TCP port 5432.
-- `collector` — built from `Dockerfile` on branch `main`, public HTTP port 9090,
-  `DB_DSN` pointing at `postgres:5432` (project-internal DNS).
+Northflank does not run `docker compose`; `northflank.json` is a GitOps
+template that deploys only the collector container. PostgreSQL is the
+Northflank managed Postgres addon, not a container managed by this template.
 
 One-time setup:
 
 1. Create a template in Northflank, link this repository/branch `main`, path
    `/northflank.json`.
 2. Enable GitOps and **run automatically when the template is updated**.
-3. Set the `PROJECT_ID` argument override to the target project ID.
-4. Optionally override `DB_PASSWORD` (pilot default is `collector`).
+3. Set argument overrides (secure on Northflank, never committed here):
+   - `PROJECT_ID` — target project ID.
+   - `DB_DSN` — the addon `POSTGRES_URI` with `sslmode=require`.
 
-Then every push to `main` runs the template: the DB container is updated in
-place (its volume is preserved) and the collector is rebuilt with cache
-disabled and redeployed. Build cache is deliberately off because a stale
-binary previously survived a deploy.
+Then every push to `main` rebuilds the collector with cache disabled and
+redeploys it against that database. Build cache is deliberately off because a
+stale binary previously survived a deploy. The collector's `run` subcommand
+self-migrates, so a fresh addon database is initialised automatically.
 
 The binary defaults to the `run` subcommand, which now self-migrates, so no
 platform command override is needed. `DATABASE_URL` is accepted as an alias

@@ -55,17 +55,20 @@ be ~75 s stale). See `RUNBOOK.md`.
 
 Locally the whole pilot is `docker compose up -d --build` (PostgreSQL +
 collector). Northflank does not execute `docker compose`, so `northflank.json`
-describes the equivalent two-container stack as a GitOps template:
+is a GitOps template that deploys the collector container on every push to
+`main`. It does **not** create a database: use the Northflank Postgres addon
+and pass its connection string as the `DB_DSN` argument override.
 
-- `postgres` — `postgres:16-alpine` with a persistent volume, private port 5432.
-- `collector` — built from this repo's Dockerfile on `main`, public HTTP port 9090.
+One-time setup: create a template linked to this repository, branch `main`,
+path `/northflank.json`, enable GitOps and "run automatically when the template
+is updated". Set argument overrides (stored securely on Northflank, never in
+this repo):
 
-One-time setup in Northflank: create a template linked to this repository,
-branch `main`, path `/northflank.json`, enable GitOps and "run automatically
-when the template is updated", then set the `PROJECT_ID` argument override to
-the target project ID. Optional: override `DB_PASSWORD` (default `collector`).
-After that, every push to `main` re-runs the template and redeploys both
-containers. See `RUNBOOK.md` for details.
+- `PROJECT_ID` — target Northflank project ID.
+- `DB_DSN` — the addon's `postgresql://…?sslmode=require` URI.
+
+After that, pushes to `main` rebuild and redeploy the collector. See
+`RUNBOOK.md` for details.
 
 ## Status
 
