@@ -1,12 +1,6 @@
 {
-  "name": "weather api",
-  "description": "Metals L1 collector pilot: PostgreSQL addon + collector service, auto-deployed from main.",
+  "$schema": "https://api.northflank.com/v1/schemas/template",
   "apiVersion": "v1.2",
-  "options": {
-    "autorun": true,
-    "runOnUpdate": true,
-    "concurrencyPolicy": "queue"
-  },
   "spec": {
     "kind": "Workflow",
     "spec": {
@@ -25,7 +19,8 @@
               }
             },
             "region": "europe-west"
-          }
+          },
+          "updateMode": "put"
         },
         {
           "kind": "Workflow",
@@ -52,7 +47,8 @@
                     "replicas": 1
                   },
                   "tlsEnabled": true
-                }
+                },
+                "updateMode": "put"
               },
               {
                 "kind": "SecretGroup",
@@ -71,12 +67,21 @@
                       "keys": [
                         {
                           "keyName": "POSTGRES_URI",
-                          "aliases": ["DB_DSN"]
+                          "aliases": [
+                            "DB_DSN"
+                          ]
                         }
                       ]
                     }
-                  ]
-                }
+                  ],
+                  "restrictions": {
+                    "restricted": false,
+                    "nfObjects": [],
+                    "tags": [],
+                    "stageIds": []
+                  }
+                },
+                "updateMode": "put"
               },
               {
                 "kind": "Condition",
@@ -114,7 +119,12 @@
                       "name": "p01",
                       "internalPort": 9090,
                       "protocol": "HTTP",
-                      "public": true
+                      "public": true,
+                      "security": {
+                        "credentials": [],
+                        "policies": [],
+                        "sso": {}
+                      }
                     }
                   ],
                   "loadBalancing": {
@@ -160,16 +170,33 @@
                       "initialDelaySeconds": 15,
                       "periodSeconds": 30,
                       "timeoutSeconds": 3,
-                      "failureThreshold": 3,
-                      "successThreshold": 1
+                      "failureThreshold": 3
                     }
-                  ]
-                }
+                  ],
+                  "buildConfiguration": {
+                    "pathIgnoreRules": [],
+                    "isAllowList": false,
+                    "ciIgnoreFlagsEnabled": false
+                  },
+                  "buildArguments": {}
+                },
+                "updateMode": "put"
               }
             ]
           }
         }
       ]
     }
+  },
+  "options": {
+    "autorun": true,
+    "concurrencyPolicy": "queue"
+  },
+  "gitops": {
+    "repoUrl": "https://github.com/svirmi/weather-api",
+    "vcsService": "github",
+    "accountLogin": "svirmi",
+    "branch": "main",
+    "filePath": "/northflank.json"
   }
 }
