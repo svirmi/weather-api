@@ -1,6 +1,7 @@
 # Pair Spread Viewer — Design Spec
 
-**Status:** design frozen, implementation not started.
+**Status:** design frozen; API core implemented with hermetic contract tests;
+page, DB smoke test and deployment pending.
 **Date:** 2026-11-28.
 **Owner:** local testing/tuning tool for the metals L1 pilot.
 
