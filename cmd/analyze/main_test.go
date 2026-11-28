@@ -19,16 +19,16 @@ func TestRunAggregates(t *testing.T) {
 					"max_gap_sec":2,"duplicates":0,"bid_lt_ask_ratio":1}],
 				"partitions":[],"future_partitions":7,"future_ok":true,"aged_partitions":[]
 			}`))
-		case "/api/v1/spread":
+		case "/api/v1/rows":
 			pages++
 			if r.URL.Query().Get("cursor") == "" {
 				_, _ = w.Write([]byte(`{"from":1000,"to":2000,"limit":5000,"next_cursor":1002,
-					"rows":[{"ts":1000,"symbol":"XAUUSDT","bid":99,"ask":101,"mid":100,"spread":1},
-					        {"ts":1001,"symbol":"XAUUSDT","bid":98,"ask":101,"mid":100,"spread":2}]}`))
+					"rows":[{"ts":1000,"bid":99.5,"ask":100.5},
+					        {"ts":1001,"bid":99,"ask":101}]}`))
 				return
 			}
 			_, _ = w.Write([]byte(`{"from":1000,"to":2000,"limit":5000,
-				"rows":[{"ts":1002,"symbol":"XAUUSDT","bid":97,"ask":101,"mid":100,"spread":3}]}`))
+				"rows":[{"ts":1002,"bid":98.5,"ask":101.5}]}`))
 		default:
 			http.NotFound(w, r)
 		}

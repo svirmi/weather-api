@@ -1,5 +1,5 @@
 // Command analyze builds a local daily report from the collector's read-only
-// /api/v1/stats and /api/v1/spread endpoints. It never touches the database
+// /api/v1/stats and /api/v1/rows endpoints. It never touches the database
 // directly and stores only aggregate results.
 package main
 
@@ -44,21 +44,18 @@ type statsResponse struct {
 	AgedPartitions   []string      `json:"aged_partitions"`
 }
 
-type spreadRow struct {
-	TS     int64   `json:"ts"`
-	Symbol string  `json:"symbol"`
-	Bid    float64 `json:"bid"`
-	Ask    float64 `json:"ask"`
-	Mid    float64 `json:"mid"`
-	Spread float64 `json:"spread"`
+type rawRow struct {
+	TS  int64   `json:"ts"`
+	Bid float64 `json:"bid"`
+	Ask float64 `json:"ask"`
 }
 
-type spreadResponse struct {
-	From       int64       `json:"from"`
-	To         int64       `json:"to"`
-	Limit      int         `json:"limit"`
-	NextCursor int64       `json:"next_cursor,omitempty"`
-	Rows       []spreadRow `json:"rows"`
+type rowsResponse struct {
+	From       int64    `json:"from"`
+	To         int64    `json:"to"`
+	Limit      int      `json:"limit"`
+	NextCursor int64    `json:"next_cursor,omitempty"`
+	Rows       []rawRow `json:"rows"`
 }
 
 type spreadStats struct {
@@ -132,7 +129,7 @@ func run(ctx context.Context, client *http.Client, base string, from, to int64, 
 	basisPoints := []float64{}
 	cursor := int64(0)
 	for page := 0; page < maxPages; page++ {
-		u, err := url.Parse(base + "/api/v1/spread")
+		u, err := url.Parse(base + "/api/v1/rows")
 		if err != nil {
 			return Report{}, err
 		}
@@ -147,14 +144,15 @@ func run(ctx context.Context, client *http.Client, base string, from, to int64, 
 		}
 		u.RawQuery = q.Encode()
 
-		var pageResp spreadResponse
+		var pageResp rowsResponse
 		if err := getJSON(ctx, client, u.String(), &pageResp); err != nil {
 			return Report{}, err
 		}
 		for _, row := range pageResp.Rows {
-			values = append(values, row.Spread)
-			if row.Mid > 0 {
-				basisPoints = append(basisPoints, 10000*row.Spread/row.Mid)
+			spread := row.Ask - row.Bid
+			values = append(values, spread)
+			if mid := (row.Ask + row.Bid) / 2; mid > 0 {
+				basisPoints = append(basisPoints, 10000*spread/mid)
 			}
 		}
 		cursor = pageResp.NextCursor

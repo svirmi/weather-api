@@ -161,10 +161,16 @@ func NewHandler(store StoreReader, cache *Cache, now Clock, pollMS int, metrics 
 	return &Handler{Store: store, Cache: cache, Now: now, PollMS: pollMS, Metrics: metrics}
 }
 
-// Register attaches the v1 routes to a mux. CORS is applied by the caller.
-func (h *Handler) Register(mux *http.ServeMux) {
+// RegisterAPI attaches only the pair-series routes. Use this when mounting
+// the API inside another service that already has /healthz and /metrics.
+func (h *Handler) RegisterAPI(mux *http.ServeMux) {
 	mux.HandleFunc(historyPath, h.handleHistory)
 	mux.HandleFunc(livePath, h.handleLive)
+}
+
+// Register attaches the v1 routes to a mux. CORS is applied by the caller.
+func (h *Handler) Register(mux *http.ServeMux) {
+	h.RegisterAPI(mux)
 	mux.HandleFunc("/healthz", h.handleHealth)
 	mux.Handle("/metrics", h.Metrics.Handler())
 }

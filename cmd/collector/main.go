@@ -25,6 +25,7 @@ import (
 	"metals-collector/internal/ops"
 	"metals-collector/internal/rawproxy"
 	"metals-collector/internal/session"
+	"metals-collector/internal/spread"
 	"metals-collector/internal/store"
 	"metals-collector/internal/verify"
 )
@@ -125,11 +126,16 @@ func serve(_ []string, doMigrate bool, log *slog.Logger) error {
 	reg := registerMetrics(cfg)
 	opsSrv := ops.NewServer(cfg.MetricsAddr, reg, log)
 
-	// The read-only data proxy shares this server and pool so it needs no
-	// second service, port, image, or secret. It only adds /api/v1/* routes.
-	proxyMux := http.NewServeMux()
-	rawproxy.NewHandler(rawproxy.NewStore(pool), time.Now, rawproxy.NewMetrics()).RegisterAPI(proxyMux)
-	opsSrv.Mount("/api/v1/", rawproxy.DefaultMiddleware(proxyMux))
+	// The read-only data proxy and pair-spread API share this server and pool
+	// so they need no second service, port, image, or secret.
+	apiMux := http.NewServeMux()
+	rawproxy.NewHandler(rawproxy.NewStore(pool), time.Now, rawproxy.NewMetrics()).RegisterAPI(apiMux)
+	spread.NewHandler(
+		spread.NewStore(pool),
+		spread.NewCache(60*time.Second, time.Now),
+		time.Now, 1000, spread.NewMetrics(),
+	).RegisterAPI(apiMux)
+	opsSrv.Mount("/api/v1/", rawproxy.DefaultMiddleware(apiMux))
 
 	if err := opsSrv.Start(); err != nil {
 		return fmt.Errorf("start ops server: %w", err)

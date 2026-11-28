@@ -153,7 +153,12 @@ same public URL as `/healthz` and `/metrics`, for example:
 - `/api/v1/stats?from=…&to=…` — one shot with per-symbol row counts, first/last
   ts, max gap, duplicates, `bid<ask` ratio and partition state. This covers all
   DB-backed T9 checks without pulling ~235 k rows locally.
-- `/api/v1/spread`, `/api/v1/sessions`, `/api/v1/metrics`.
+- `/api/v1/sessions`, `/api/v1/metrics`.
+
+The pair-spread API used by `tools/spread-view/index.html` is also mounted on
+the same server: `/api/v1/spread?pair=XAU-XAG&range=1d` and
+`/api/v1/spread/live?pair=XAU-XAG&after=<ts>`. Open the page directly — it
+defaults to the deployed public URL, or override with `?api=<base-url>`.
 
 The endpoints are unauthenticated and only issue the read-only SQL above, but
 they are public — treat them as an open data source. `cmd/rawproxy` remains as
