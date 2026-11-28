@@ -141,6 +141,25 @@ Optional agreement test: a second collector writing to a **separate** DB for
 a fixed 1 h window, agreement ≥99 % (two writers into one table would collide
 on the primary key).
 
+## Dev data proxy (`rawproxy`)
+
+A separate, unauthenticated read-only HTTP service for local testing. It runs
+inside Northflank (where the Postgres addon is reachable) and exposes:
+
+- `/api/v1/rows?symbol=XAUUSDT&from=…&to=…&order=asc&limit=5000` — raw rows;
+  when a full page is returned, feed the response's `next_cursor` into the next
+  request's `cursor=` parameter to page without slicing time windows.
+- `/api/v1/stats?from=…&to=…` — one shot with per-symbol row counts, first/last
+  ts, max gap, duplicates, `bid<ask` ratio and partition state. This covers all
+  DB-backed T9 checks without pulling ~235 k rows locally.
+- `/api/v1/spread`, `/api/v1/sessions`, `/healthz`, `/metrics`.
+
+Deploy: `northflank.json` already contains the `rawproxy` service; it uses the
+injected `DB_DSN` and needs no token secret. Apply the template manually and
+build/deploy `rawproxy` manually (`disabledCI: true`, `autorun: false`). The
+endpoint is public and unauthenticated — it only issues the read-only SQL
+above, but treat it as an open data source.
+
 ## Known limitations
 
 RPI orders are invisible in `bookTicker`; `"volume at L1"` means resting

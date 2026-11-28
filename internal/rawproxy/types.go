@@ -14,6 +14,10 @@ const (
 	MaxWindow    = 24 * time.Hour
 	DefaultRows  = 1000
 	QueryTimeout = 10 * time.Second
+
+	// T9 defaults, kept here so /stats needs no extra configuration.
+	PartitionAheadDays = 7
+	RetentionDays      = 45
 )
 
 // Symbols is the allow-list of queryable symbols.
@@ -53,16 +57,39 @@ type SessionRow struct {
 	Kind  string `json:"kind"`
 }
 
-// Query is the validated, bounded filter shared by all endpoints.
+// SymbolStats is the compact per-symbol summary returned by /stats.
+type SymbolStats struct {
+	Symbol        string  `json:"symbol"`
+	Rows          int64   `json:"rows"`
+	FirstTS       int64   `json:"first_ts"`
+	LastTS        int64   `json:"last_ts"`
+	MaxGapSec     int64   `json:"max_gap_sec"`
+	Duplicates    int64   `json:"duplicates"`
+	BidLTAskRatio float64 `json:"bid_lt_ask_ratio"`
+}
+
+// Stats bundles every DB-backed T9 check plus basic analytics in one response.
+type Stats struct {
+	Symbols          []SymbolStats `json:"symbols"`
+	Partitions       []string      `json:"partitions"`
+	FuturePartitions int           `json:"future_partitions"`
+	FutureOK         bool          `json:"future_ok"`
+	AgedPartitions   []string      `json:"aged_partitions"`
+}
+
+// Query is the validated, bounded filter shared by all endpoints. Cursor is
+// an ascending-only lower bound: it lets callers page without slicing time.
 type Query struct {
 	Symbol string
 	From   int64
 	To     int64
 	Limit  int
 	Order  string
+	Cursor int64
 }
 
 // ParseQuery validates a request's filters. from/to default to the last 24 h.
+// A cursor, when present, replaces from and requires order=asc.
 func ParseQuery(v url.Values, now time.Time, requireSymbol bool) (Query, error) {
 	to := now.UTC().Unix()
 	from := to - int64(MaxWindow/time.Second)
@@ -100,6 +127,21 @@ func ParseQuery(v url.Values, now time.Time, requireSymbol bool) (Query, error) 
 		return Query{}, fmt.Errorf("order must be asc or desc")
 	}
 
+	var cursor int64
+	if raw := v.Get("cursor"); raw != "" {
+		cursor, err = atoi64(raw)
+		if err != nil {
+			return Query{}, fmt.Errorf("invalid cursor: %s", raw)
+		}
+		if order != "asc" {
+			return Query{}, fmt.Errorf("cursor requires order=asc")
+		}
+		if cursor < from || cursor >= to {
+			return Query{}, fmt.Errorf("cursor must be inside the window")
+		}
+		from = cursor
+	}
+
 	symbol := v.Get("symbol")
 	if symbol != "" && !Symbols[symbol] {
 		return Query{}, fmt.Errorf("unknown symbol: %s", symbol)
@@ -107,7 +149,7 @@ func ParseQuery(v url.Values, now time.Time, requireSymbol bool) (Query, error) 
 	if requireSymbol && symbol == "" {
 		return Query{}, fmt.Errorf("symbol is required")
 	}
-	return Query{Symbol: symbol, From: from, To: to, Limit: limit, Order: order}, nil
+	return Query{Symbol: symbol, From: from, To: to, Limit: limit, Order: order, Cursor: cursor}, nil
 }
 
 func atoi64(s string) (int64, error) {

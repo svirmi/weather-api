@@ -22,15 +22,12 @@ import (
 
 const (
 	defaultAddr     = "127.0.0.1:9092"
-	defaultOrigins  = "http://127.0.0.1:8080"
 	shutdownTimeout = 5 * time.Second
 )
 
 type config struct {
-	DSN     string
-	Addr    string
-	Token   string
-	Origins string
+	DSN  string
+	Addr string
 }
 
 func loadConfig() (config, error) {
@@ -41,19 +38,11 @@ func loadConfig() (config, error) {
 	if dsn == "" {
 		return config{}, errors.New("DB_DSN (or DATABASE_URL) is required")
 	}
-	token := os.Getenv("RAWPROXY_TOKEN")
-	if token == "" {
-		return config{}, errors.New("RAWPROXY_TOKEN is required")
-	}
 	addr := os.Getenv("RAWPROXY_ADDR")
 	if addr == "" {
 		addr = defaultAddr
 	}
-	origins := os.Getenv("RAWPROXY_ALLOWED_ORIGINS")
-	if origins == "" {
-		origins = defaultOrigins
-	}
-	return config{DSN: dsn, Addr: addr, Token: token, Origins: origins}, nil
+	return config{DSN: dsn, Addr: addr}, nil
 }
 
 func newLogger() *slog.Logger {
@@ -115,11 +104,9 @@ func run() error {
 	h := rawproxy.NewHandler(rawproxy.NewStore(pool), time.Now, rawproxy.NewMetrics())
 	mux := http.NewServeMux()
 	h.Register(mux)
-	auth := rawproxy.NewAuth(cfg.Token)
-	handler := rawproxy.NewCORS(cfg.Origins).Middleware(auth.Middleware(mux))
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           handler,
+		Handler:           rawproxy.DefaultMiddleware(mux),
 		ReadHeaderTimeout: 2 * time.Second,
 	}
 

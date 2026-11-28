@@ -2,12 +2,10 @@ package rawproxy
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 )
@@ -17,19 +15,21 @@ type ErrorResponse struct {
 }
 
 type RowsResponse struct {
-	Symbol string `json:"symbol"`
-	From   int64  `json:"from"`
-	To     int64  `json:"to"`
-	Limit  int    `json:"limit"`
-	Rows   []Row  `json:"rows"`
+	Symbol     string `json:"symbol"`
+	From       int64  `json:"from"`
+	To         int64  `json:"to"`
+	Limit      int    `json:"limit"`
+	NextCursor int64  `json:"next_cursor,omitempty"`
+	Rows       []Row  `json:"rows"`
 }
 
 type SpreadResponse struct {
-	Symbol string      `json:"symbol"`
-	From   int64       `json:"from"`
-	To     int64       `json:"to"`
-	Limit  int         `json:"limit"`
-	Rows   []SpreadRow `json:"rows"`
+	Symbol     string      `json:"symbol"`
+	From       int64       `json:"from"`
+	To         int64       `json:"to"`
+	Limit      int         `json:"limit"`
+	NextCursor int64       `json:"next_cursor,omitempty"`
+	Rows       []SpreadRow `json:"rows"`
 }
 
 type SessionsResponse struct {
@@ -39,74 +39,31 @@ type SessionsResponse struct {
 	Rows  []SessionRow `json:"rows"`
 }
 
+type StatsResponse struct {
+	From int64 `json:"from"`
+	To   int64 `json:"to"`
+	Stats
+}
+
 // StoreReader is the database side used by handlers; the contract tests use a
 // fixture-backed fake.
 type StoreReader interface {
 	Rows(ctx context.Context, q Query) ([]Row, error)
 	SpreadRows(ctx context.Context, q Query) ([]SpreadRow, error)
 	Sessions(ctx context.Context, q Query) ([]SessionRow, error)
+	Stats(ctx context.Context, q Query) (Stats, error)
 }
 
-// Auth enforces a bearer token on every path except /healthz.
-type Auth struct {
-	token []byte
-}
-
-// NewAuth creates the token gate.
-func NewAuth(token string) *Auth { return &Auth{token: []byte(token)} }
-
-// Middleware wraps a handler with token authentication.
-func (a *Auth) Middleware(next http.Handler) http.Handler {
+// DefaultMiddleware makes the proxy easy to use from scripts and browsers.
+// The service is intentionally unauthenticated; it only ever issues read-only
+// SQL and lives behind the platform's public HTTPS endpoint.
+func DefaultMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/healthz" {
-			next.ServeHTTP(w, r)
-			return
-		}
-		raw := strings.TrimSpace(r.Header.Get("Authorization"))
-		if strings.HasPrefix(raw, "Bearer ") {
-			raw = strings.TrimSpace(strings.TrimPrefix(raw, "Bearer "))
-		} else if key := r.Header.Get("X-API-Key"); key != "" {
-			raw = key
-		}
-		if raw == "" || subtle.ConstantTimeCompare([]byte(raw), a.token) != 1 {
-			writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized"})
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// CORS allows only explicitly configured origins.
-type CORS struct {
-	allowed map[string]bool
-}
-
-// NewCORS builds an origin allow-list from a comma-separated string.
-func NewCORS(list string) *CORS {
-	m := make(map[string]bool)
-	for _, origin := range strings.Split(list, ",") {
-		if o := strings.TrimSpace(origin); o != "" {
-			m[o] = true
-		}
-	}
-	return &CORS{allowed: m}
-}
-
-// Middleware sets CORS headers only for allowed origins.
-func (c *CORS) Middleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		origin := r.Header.Get("Origin")
-		if origin != "" && c.allowed[origin] {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			w.Header().Set("Vary", "Origin")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, X-API-Key, Content-Type")
-			if r.Method == http.MethodOptions {
-				w.WriteHeader(http.StatusNoContent)
-				return
-			}
-		} else if r.Method == http.MethodOptions {
-			writeJSON(w, http.StatusForbidden, ErrorResponse{Error: "origin not allowed"})
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -170,17 +127,41 @@ func NewHandler(store StoreReader, now func() time.Time, metrics *Metrics) *Hand
 	return &Handler{Store: store, Now: now, Metrics: metrics}
 }
 
-// Register attaches routes. Auth and CORS are applied by the caller.
+// Register attaches routes. Callers wrap the mux with DefaultMiddleware.
 func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/rows", h.handleRows)
 	mux.HandleFunc("/api/v1/spread", h.handleSpread)
 	mux.HandleFunc("/api/v1/sessions", h.handleSessions)
+	mux.HandleFunc("/api/v1/stats", h.handleStats)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	mux.Handle("/metrics", h.Metrics.Handler())
+}
+
+func nextCursor(ts []int64, order string, limit int) int64 {
+	if order != "asc" || len(ts) < limit || len(ts) == 0 {
+		return 0
+	}
+	return ts[len(ts)-1] + 1
+}
+
+func rowTimes(rows []Row) []int64 {
+	out := make([]int64, len(rows))
+	for i := range rows {
+		out[i] = rows[i].TS
+	}
+	return out
+}
+
+func spreadTimes(rows []SpreadRow) []int64 {
+	out := make([]int64, len(rows))
+	for i := range rows {
+		out[i] = rows[i].TS
+	}
+	return out
 }
 
 func (h *Handler) handleRows(w http.ResponseWriter, r *http.Request) {
@@ -204,7 +185,10 @@ func (h *Handler) handleRows(w http.ResponseWriter, r *http.Request) {
 		rows = []Row{}
 	}
 	h.Metrics.record("/api/v1/rows", false)
-	writeJSON(w, http.StatusOK, RowsResponse{Symbol: q.Symbol, From: q.From, To: q.To, Limit: q.Limit, Rows: rows})
+	writeJSON(w, http.StatusOK, RowsResponse{
+		Symbol: q.Symbol, From: q.From, To: q.To, Limit: q.Limit,
+		NextCursor: nextCursor(rowTimes(rows), q.Order, q.Limit), Rows: rows,
+	})
 }
 
 func (h *Handler) handleSpread(w http.ResponseWriter, r *http.Request) {
@@ -228,7 +212,10 @@ func (h *Handler) handleSpread(w http.ResponseWriter, r *http.Request) {
 		rows = []SpreadRow{}
 	}
 	h.Metrics.record("/api/v1/spread", false)
-	writeJSON(w, http.StatusOK, SpreadResponse{Symbol: q.Symbol, From: q.From, To: q.To, Limit: q.Limit, Rows: rows})
+	writeJSON(w, http.StatusOK, SpreadResponse{
+		Symbol: q.Symbol, From: q.From, To: q.To, Limit: q.Limit,
+		NextCursor: nextCursor(spreadTimes(rows), q.Order, q.Limit), Rows: rows,
+	})
 }
 
 func (h *Handler) handleSessions(w http.ResponseWriter, r *http.Request) {
@@ -253,6 +240,27 @@ func (h *Handler) handleSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	h.Metrics.record("/api/v1/sessions", false)
 	writeJSON(w, http.StatusOK, SessionsResponse{From: q.From, To: q.To, Limit: q.Limit, Rows: rows})
+}
+
+func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, ErrorResponse{Error: "method not allowed"})
+		return
+	}
+	q, err := ParseQuery(r.URL.Query(), h.Now(), false)
+	if err != nil {
+		h.Metrics.record("/api/v1/stats", true)
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: err.Error()})
+		return
+	}
+	stats, err := h.Store.Stats(r.Context(), q)
+	if err != nil {
+		h.Metrics.record("/api/v1/stats", true)
+		writeJSON(w, http.StatusInternalServerError, ErrorResponse{Error: err.Error()})
+		return
+	}
+	h.Metrics.record("/api/v1/stats", false)
+	writeJSON(w, http.StatusOK, StatsResponse{From: q.From, To: q.To, Stats: stats})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

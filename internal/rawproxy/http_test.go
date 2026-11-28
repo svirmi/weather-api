@@ -16,6 +16,7 @@ type fakeStore struct {
 	rows     []Row
 	spread   []SpreadRow
 	sessions []SessionRow
+	stats    Stats
 }
 
 func (f *fakeStore) Rows(_ context.Context, _ Query) ([]Row, error)             { return f.rows, nil }
@@ -23,26 +24,17 @@ func (f *fakeStore) SpreadRows(_ context.Context, _ Query) ([]SpreadRow, error) 
 func (f *fakeStore) Sessions(_ context.Context, _ Query) ([]SessionRow, error) {
 	return f.sessions, nil
 }
+func (f *fakeStore) Stats(_ context.Context, _ Query) (Stats, error) { return f.stats, nil }
 
-func newTestHandler(store StoreReader) (*Handler, *http.ServeMux) {
+func newTestHandler(store StoreReader) (*Handler, http.Handler) {
 	h := NewHandler(store, func() time.Time { return fixedNow }, NewMetrics())
 	mux := http.NewServeMux()
 	h.Register(mux)
-	return h, mux
+	return h, DefaultMiddleware(mux)
 }
 
-func secured(mux *http.ServeMux) http.Handler {
-	return NewCORS("http://127.0.0.1:8080").Middleware(NewAuth("secret").Middleware(mux))
-}
-
-func request(h http.Handler, method, target, token, origin string) *httptest.ResponseRecorder {
+func request(h http.Handler, method, target string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, target, nil)
-	if token != "" {
-		req.Header.Set("Authorization", "Bearer "+token)
-	}
-	if origin != "" {
-		req.Header.Set("Origin", origin)
-	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
@@ -70,102 +62,94 @@ func assertKeys(t *testing.T, m map[string]any, want ...string) {
 	}
 }
 
-func TestAuthAndHealth(t *testing.T) {
-	_, mux := newTestHandler(&fakeStore{})
-	h := secured(mux)
-
-	rec := request(h, http.MethodGet, "/api/v1/rows?symbol=XPTUSDT", "", "")
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("no token: %d", rec.Code)
-	}
-	assertKeys(t, object(t, rec), "error")
-
-	rec = request(h, http.MethodGet, "/api/v1/rows?symbol=XPTUSDT", "secret", "")
-	if rec.Code != http.StatusOK {
-		t.Errorf("bearer: %d %s", rec.Code, rec.Body.String())
-	}
-	rec = request(h, http.MethodGet, "/api/v1/rows?symbol=XPTUSDT", "", "")
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/rows?symbol=XPTUSDT", nil)
-	req.Header.Set("X-API-Key", "secret")
-	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Errorf("X-API-Key: %d", rec.Code)
-	}
-
-	rec = request(h, http.MethodGet, "/healthz", "", "")
+func TestHealthAndOptions(t *testing.T) {
+	_, h := newTestHandler(&fakeStore{})
+	rec := request(h, http.MethodGet, "/healthz")
 	if rec.Code != http.StatusOK || rec.Body.String() != "ok\n" {
 		t.Errorf("health: %d %q", rec.Code, rec.Body.String())
 	}
-}
-
-func TestCORS(t *testing.T) {
-	_, mux := newTestHandler(&fakeStore{})
-	h := secured(mux)
-
-	rec := request(h, http.MethodGet, "/api/v1/rows?symbol=XPTUSDT", "secret", "http://127.0.0.1:8080")
-	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://127.0.0.1:8080" {
-		t.Errorf("allowed origin header = %q", got)
-	}
-	rec = request(h, http.MethodOptions, "/api/v1/rows", "", "http://127.0.0.1:8080")
-	if rec.Code != http.StatusNoContent {
-		t.Errorf("allowed preflight = %d", rec.Code)
-	}
-	rec = request(h, http.MethodOptions, "/api/v1/rows", "", "https://evil.example")
-	if rec.Code != http.StatusForbidden {
-		t.Errorf("disallowed preflight = %d", rec.Code)
-	}
-	rec = request(h, http.MethodGet, "/api/v1/rows?symbol=XPTUSDT", "secret", "https://evil.example")
-	if rec.Header().Get("Access-Control-Allow-Origin") != "" {
-		t.Error("disallowed origin got CORS header")
+	rec = request(h, http.MethodOptions, "/api/v1/rows")
+	if rec.Code != http.StatusNoContent || rec.Header().Get("Access-Control-Allow-Origin") != "*" {
+		t.Errorf("preflight: %d origin=%q", rec.Code, rec.Header().Get("Access-Control-Allow-Origin"))
 	}
 }
 
-func TestRowContracts(t *testing.T) {
+func TestRowContractsAndCursor(t *testing.T) {
 	store := &fakeStore{
 		rows:     []Row{{TS: 1000, ExchTime: 999, Bid: 1, BidQty: 2, Ask: 3, AskQty: 4}},
 		spread:   []SpreadRow{{TS: 1000, Symbol: "XPTUSDT", Bid: 1, Ask: 3, BidQty: 2, AskQty: 4, Spread: 2, Mid: 2}},
 		sessions: []SessionRow{{Start: 1000, End: 4600, Kind: "REGULAR"}},
 	}
-	_, mux := newTestHandler(store)
+	_, h := newTestHandler(store)
 
-	rec := request(secured(mux), http.MethodGet, "/api/v1/rows?symbol=XPTUSDT", "secret", "")
+	rec := request(h, http.MethodGet, "/api/v1/rows?symbol=XPTUSDT&order=asc&limit=1")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("rows: %d %s", rec.Code, rec.Body.String())
 	}
 	obj := object(t, rec)
-	assertKeys(t, obj, "symbol", "from", "to", "limit", "rows")
+	assertKeys(t, obj, "symbol", "from", "to", "limit", "next_cursor", "rows")
+	if obj["next_cursor"] != float64(1001) {
+		t.Errorf("next_cursor = %v, want 1001", obj["next_cursor"])
+	}
 	assertKeys(t, obj["rows"].([]any)[0].(map[string]any), "ts", "exchTime", "bid", "bidQty", "ask", "askQty")
 
-	rec = request(secured(mux), http.MethodGet, "/api/v1/spread?symbol=XPTUSDT", "secret", "")
+	rec = request(h, http.MethodGet, "/api/v1/rows?symbol=XPTUSDT&order=desc&limit=1")
+	if _, ok := object(t, rec)["next_cursor"]; ok {
+		t.Error("desc response should not carry next_cursor")
+	}
+
+	rec = request(h, http.MethodGet, "/api/v1/spread?symbol=XPTUSDT")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("spread: %d %s", rec.Code, rec.Body.String())
+	}
 	obj = object(t, rec)
 	assertKeys(t, obj["rows"].([]any)[0].(map[string]any), "ts", "symbol", "bid", "ask", "bidQty", "askQty", "spread", "mid")
 
-	rec = request(secured(mux), http.MethodGet, "/api/v1/sessions", "secret", "")
+	rec = request(h, http.MethodGet, "/api/v1/sessions")
 	obj = object(t, rec)
 	assertKeys(t, obj, "from", "to", "limit", "rows")
 	assertKeys(t, obj["rows"].([]any)[0].(map[string]any), "start", "end", "kind")
 }
 
+func TestStatsContract(t *testing.T) {
+	store := &fakeStore{stats: Stats{
+		Symbols:          []SymbolStats{{Symbol: "XPTUSDT", Rows: 10, MaxGapSec: 2, Duplicates: 1, BidLTAskRatio: 0.99}},
+		Partitions:       []string{"book_l1_20261128"},
+		FuturePartitions: 7,
+		FutureOK:         true,
+		AgedPartitions:   []string{},
+	}}
+	_, h := newTestHandler(store)
+	rec := request(h, http.MethodGet, "/api/v1/stats")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("stats: %d %s", rec.Code, rec.Body.String())
+	}
+	obj := object(t, rec)
+	assertKeys(t, obj, "from", "to", "symbols", "partitions", "future_partitions", "future_ok", "aged_partitions")
+	sym := obj["symbols"].([]any)[0].(map[string]any)
+	assertKeys(t, sym, "symbol", "rows", "first_ts", "last_ts", "max_gap_sec", "duplicates", "bid_lt_ask_ratio")
+}
+
 func TestEmptyRowsAreArrays(t *testing.T) {
-	_, mux := newTestHandler(&fakeStore{})
-	rec := request(secured(mux), http.MethodGet, "/api/v1/rows?symbol=XAUUSDT", "secret", "")
+	_, h := newTestHandler(&fakeStore{})
+	rec := request(h, http.MethodGet, "/api/v1/rows?symbol=XAUUSDT")
 	if !strings.Contains(rec.Body.String(), `"rows":[]`) {
 		t.Errorf("body = %s", rec.Body.String())
 	}
 }
 
 func TestValidation(t *testing.T) {
-	_, mux := newTestHandler(&fakeStore{})
-	h := secured(mux)
+	_, h := newTestHandler(&fakeStore{})
 	for _, target := range []string{
 		"/api/v1/rows?symbol=NOPE",
 		"/api/v1/rows",
 		"/api/v1/rows?symbol=XPTUSDT&limit=5001",
+		"/api/v1/rows?symbol=XPTUSDT&order=desc&cursor=1000",
 		"/api/v1/spread?symbol=XPTUSDT&from=0&to=90000",
 		"/api/v1/sessions?order=sideways",
+		"/api/v1/stats?from=1000&to=0",
 	} {
-		rec := request(h, http.MethodGet, target, "secret", "")
+		rec := request(h, http.MethodGet, target)
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("%s: %d", target, rec.Code)
 		}
@@ -174,10 +158,9 @@ func TestValidation(t *testing.T) {
 }
 
 func TestMetrics(t *testing.T) {
-	_, mux := newTestHandler(&fakeStore{})
-	h := secured(mux)
-	request(h, http.MethodGet, "/api/v1/rows?symbol=XPTUSDT", "secret", "")
-	rec := request(h, http.MethodGet, "/metrics", "secret", "")
+	_, h := newTestHandler(&fakeStore{})
+	request(h, http.MethodGet, "/api/v1/rows?symbol=XPTUSDT")
+	rec := request(h, http.MethodGet, "/metrics")
 	body := rec.Body.String()
 	if !strings.Contains(body, `rawproxy_requests_total{path="/api/v1/rows"} 1`) ||
 		!strings.Contains(body, "rawproxy_errors_total 0") {

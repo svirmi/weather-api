@@ -35,6 +35,22 @@ func TestParseQueryBounds(t *testing.T) {
 	}
 }
 
+func TestParseQueryCursor(t *testing.T) {
+	v := url.Values{}
+	v.Set("symbol", "XPTUSDT")
+	v.Set("from", "1000")
+	v.Set("to", "4600")
+	v.Set("order", "asc")
+	v.Set("cursor", "2000")
+	q, err := ParseQuery(v, fixedNow, true)
+	if err != nil {
+		t.Fatalf("ParseQuery: %v", err)
+	}
+	if q.From != 2000 || q.Cursor != 2000 || q.To != 4600 {
+		t.Errorf("q = %+v", q)
+	}
+}
+
 func TestParseQueryRejectsBadInput(t *testing.T) {
 	cases := []url.Values{
 		{"symbol": {"NOPE"}},
@@ -45,6 +61,8 @@ func TestParseQueryRejectsBadInput(t *testing.T) {
 		{"symbol": {"XPTUSDT"}, "limit": {"0"}},
 		{"symbol": {"XPTUSDT"}, "order": {"sideways"}},
 		{"symbol": {"XPTUSDT"}, "to": {"abc"}},
+		{"symbol": {"XPTUSDT"}, "cursor": {"2000"}, "from": {"1000"}, "to": {"4600"}, "order": {"desc"}},
+		{"symbol": {"XPTUSDT"}, "cursor": {"500"}, "from": {"1000"}, "to": {"4600"}, "order": {"asc"}},
 	}
 	for i, v := range cases {
 		if _, err := ParseQuery(v, fixedNow, true); err == nil {

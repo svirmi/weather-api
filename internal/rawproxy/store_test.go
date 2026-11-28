@@ -65,6 +65,14 @@ func TestSQLGuards(t *testing.T) {
 			t.Error("session query missing table or bound")
 		}
 	}
+	for _, sql := range []string{statsCountsSQL, statsCountsOneSQL, statsDupSQL, statsDupOneSQL, statsGapSQL, statsGapOneSQL} {
+		if !strings.Contains(sql, "ts_sec >= to_timestamp($1) AND ts_sec < to_timestamp($2)") {
+			t.Errorf("stats query missing window bound: %s", sql)
+		}
+	}
+	if !strings.Contains(partitionSQL, "pg_inherits") || !strings.Contains(partitionSQL, "book_l1_") {
+		t.Error("partition query is not bounded to book_l1 partitions")
+	}
 }
 
 func TestArgsAndRowDecoding(t *testing.T) {
