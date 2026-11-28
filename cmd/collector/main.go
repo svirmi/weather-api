@@ -28,6 +28,7 @@ import (
 	"metals-collector/internal/spread"
 	"metals-collector/internal/store"
 	"metals-collector/internal/verify"
+	view "metals-collector/tools/spread-view"
 )
 
 func main() {
@@ -143,6 +144,14 @@ func serve(_ []string, doMigrate bool, log *slog.Logger) error {
 
 	reg := registerMetrics(cfg)
 	opsSrv := ops.NewServer(cfg.MetricsAddr, reg, log)
+
+	// Serve the self-contained dashboard on the same public endpoint.
+	chartHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = io.WriteString(w, view.HTML)
+	})
+	opsSrv.Mount("/chart", chartHandler)
+	opsSrv.Mount("/chart/", chartHandler)
 
 	// The read-only data proxy and pair-spread API share this ops server but
 	// use a dedicated pool, so public queries cannot starve the writer.

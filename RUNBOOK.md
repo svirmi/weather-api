@@ -165,7 +165,9 @@ defaults to the deployed public URL, or override with `?api=<base-url>`.
 The same page is now a small dashboard: direct L1 cards for all four symbols
 (from `/api/v1/rows`), a 1 h health strip (`/api/v1/stats`, refreshed every
 60 s to respect the rate limit), and the current session window
-(`/api/v1/sessions`), alongside the pair-ratio chart.
+(`/api/v1/sessions`), alongside the pair-ratio chart. It is embedded in the
+collector binary and served at `/chart` on the same public endpoint, so there
+is no separate static host and no need for the `?api=` override there.
 
 API-specific counters are mirrored into `/metrics` and are also exposed at
 `/api/v1/rawproxy-metrics` and `/api/v1/spread-metrics` (including
