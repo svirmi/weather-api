@@ -163,6 +163,11 @@ parameters in v1.
 LIVE uses the live endpoint, not a `range` value. The default selected range on
 page load is **LIVE** (matching the sketch).
 
+Data only exists since the live pilot started (`2026-11-27T17:44:11Z`): `7d` and
+`45d` are partial, and `1d`/`8h`/`1h` are still filling. Tune on LIVE → 1h → 8h
+first. Retention keeps at least a full rolling 45-day window (§2.1), so the
+oldest visible buckets are limited by pilot start, not by partition drops.
+
 ---
 
 ## 5. HTTP API
@@ -174,7 +179,12 @@ page load is **LIVE** (matching the sketch).
 - CORS: `Access-Control-Allow-Origin: *`, `Access-Control-Allow-Methods: GET`,
   `Access-Control-Allow-Headers: Content-Type`. This permits opening the page
   directly from `file://` (origin `null`) as well as via a local static server.
-- No authentication in the local phase. No credentials ever reach the browser.
+- No authentication in the local phase (loopback only). No credentials ever
+  reach the browser.
+- Deployed phase (§7.3): the service must not be publicly exposed without
+  protection — either an ingress SSO/credential policy or a bearer token
+  required by the API — and `Access-Control-Allow-Origin: *` must be narrowed
+  to the page's origin. The wildcard CORS is local-only.
 - Request context timeouts: 10 s for history, 3 s for live. Live returns at most
   500 points per call.
 
@@ -282,6 +292,7 @@ WITH legs AS (
   JOIN book_l1 b USING (ts_sec)
   WHERE a.symbol = $1 AND b.symbol = $2
     AND a.ts_sec >= $3 AND a.ts_sec < $4
+    AND b.ts_sec >= $3 AND b.ts_sec < $4
     AND a.ask > 0 AND b.ask > 0
 )
 SELECT extract(epoch FROM date_bin($5::interval, ts_sec, to_timestamp(0)))::bigint AS t,
@@ -296,6 +307,10 @@ FROM legs
 GROUP BY 1
 ORDER BY 1;
 ```
+
+The range predicate is repeated on both legs so partition pruning is explicit
+on both sides of the join. Equivalence propagation through `USING (ts_sec)`
+would usually infer it, but stating it is free and removes the dependency.
 
 Live (parameters: `$1` numerator, `$2` denominator, `$3` cursor epoch seconds):
 
@@ -313,8 +328,25 @@ ORDER BY a.ts_sec
 LIMIT 500;
 ```
 
-`latest` is a separate single-row query using `ORDER BY ts_sec DESC LIMIT 1`
-with no lower bound. All queries must use `statement_timeout` via context.
+`latest` is a separate bounded single-row query:
+
+```sql
+SELECT extract(epoch FROM a.ts_sec)::bigint AS t,
+       a.ask::double precision AS ask_a,
+       b.ask::double precision AS ask_b,
+       (a.ask / b.ask)::double precision AS ratio
+FROM book_l1 a
+JOIN book_l1 b USING (ts_sec)
+WHERE a.symbol = $1 AND b.symbol = $2
+  AND a.ts_sec > now() - interval '1 hour'
+  AND a.ask > 0 AND b.ask > 0
+ORDER BY a.ts_sec DESC
+LIMIT 1;
+```
+
+The lower bound avoids a backward scan across all 45 daily partitions and
+protects the 3 s live timeout. All queries must use `statement_timeout` via
+context.
 
 ---
 
@@ -330,9 +362,12 @@ with no lower bound. All queries must use `statement_timeout` via context.
 | `internal/spread/*_test.go` | unit tests (no live DB required) |
 | `cmd/spreadapi/main.go` | config, pgx pool, HTTP server, signal handling, slog logging |
 
-Configuration is read from `DB_DSN` (or `DATABASE_URL` alias, as in
-`internal/config`) and `SPREAD_ADDR` (default `127.0.0.1:9091`). No new
-credentials or config files in the repo.
+Configuration uses a dedicated ~20-line loader in `cmd/spreadapi`: `DB_DSN`
+with a `DATABASE_URL` fallback (mirroring `internal/config`) and `SPREAD_ADDR`
+(default `127.0.0.1:9091`). Do **not** import `internal/config`: its `Load()`
+validates `SYMBOLS`, intervals and retention, and defaults `METRICS_ADDR` to
+`:9090`, which would collide with the collector's ops port. No new credentials
+or config files in the repo.
 
 The service uses a separate `pgxpool`; it does not import or modify the
 collector's pipeline, ops server, writer, or coordinator. Shutdown on SIGINT /
@@ -347,10 +382,21 @@ curl 'http://127.0.0.1:9091/api/v1/spread?pair=XAU-XAG&range=1h'
 
 ### 7.3 Later deployment (after tuning)
 
-- Add a second build target for `cmd/spreadapi` in the existing Dockerfile's
-  `build` stage and a distroless runtime stage.
-- Add a second Northflank service on its own port/ingress, linked to the same
-  Postgres addon secret, with a **read-only DB role** (`SELECT` only).
+- Use a **separate `Dockerfile.spreadapi`**, not a second stage in `Dockerfile`.
+  The existing Dockerfile ends with an unnamed distroless stage and
+  `northflank.json` sets no build `target`; BuildKit builds the last stage by
+  default. Appending a `spreadapi` runtime stage would make the existing
+  `weather-api` service build and run `/spreadapi` on 9091 while its liveness
+  probe calls `/healthz` on 9090 — with `autorun: true`, on the next push to
+  `main`. Point the new service's `buildSettings.dockerfile.dockerFilePath` at
+  the new file and leave `Dockerfile` untouched.
+- Add a second Northflank service on its own authenticated port/ingress (§5.1),
+  linked to a **new secret** for a **read-only DB role**:
+  `CREATE ROLE spread_ro LOGIN ...; GRANT SELECT ON book_l1 TO spread_ro;`
+  (the grant on the partitioned parent covers future daily partitions). The
+  existing `API-KEYS` group maps the addon `POSTGRES_URI` to `DB_DSN` with
+  `restricted: false`, so linking it would hand the service the owner DSN.
+  `spreadapi` must never call `migrate.Run` or any DDL.
 - Do not commit a changed `northflank.json` until the local version is validated:
   GitOps tracks `main` and commits deploy automatically.
 
@@ -409,6 +455,10 @@ JavaScript, plain `<canvas>` rendering, no CDN, no build step. Open via
   behavior, empty-range handling, and CORS headers.
 - Page smoke test: open `tools/spread-view/index.html`, exercise pair toggle,
   all ranges, hover tooltip, LIVE polling, and both error states.
+- `scripts/test.sh:55` runs `go test ./...`, so any test under `internal/spread`
+  lands inside the **pilot T1 acceptance gate**. Spread tests must be hermetic,
+  deterministic and sub-second; never skip on a missing DSN and never call the
+  deployed DB. Put DSN-dependent checks in a separate local smoke script.
 - Do **not** modify `scripts/test.sh` or any pilot acceptance test.
 
 ---
@@ -422,6 +472,9 @@ JavaScript, plain `<canvas>` rendering, no CDN, no build step. Open via
 | `ln(avg r)` differs from `avg(ln r)` | Documented in §3.4; optional `avg(ln r)` field later |
 | Browser local time + DST | Documented in §3.5; epoch seconds remain the wire format |
 | Reading pilot data from a local process | Read-only role before any deployment; no writes in SQL |
+| Spread tests join pilot T1 (`go test ./...`) | Hermetic, sub-second, no DSN skips; DB checks only in the local smoke script |
+| Unauthenticated public spread service | Deployed service requires token or ingress credentials; wildcard CORS is local-only (§5.1) |
+| Last-stage-default Dockerfile build | Separate `Dockerfile.spreadapi`; never append a stage to `Dockerfile` (§7.3) |
 | GitOps deploys on commit to `main` | Defer Dockerfile/Northflank changes until after tuning |
 | Repeated heavy polling | Cursor-based incremental query with `LIMIT 500`, no cache on live |
 
@@ -433,7 +486,7 @@ JavaScript, plain `<canvas>` rendering, no CDN, no build step. Open via
 2. `cmd/spreadapi` main with config, pool, server, graceful shutdown.
 3. `tools/spread-view/index.html` single-file page.
 4. Local smoke tests against the deployed DB.
-5. Only after validation: Dockerfile target, read-only DB role, Northflank
-   service.
+5. Only after validation: separate `Dockerfile.spreadapi`, read-only role plus
+   new secret, and an authenticated Northflank service.
 
 No step modifies the pilot collector, schema, retention, or acceptance tests.
