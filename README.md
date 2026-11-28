@@ -75,5 +75,9 @@ are enabled as a second safeguard. See `RUNBOOK.md` for details.
 - [x] M1 — schema, migrations, partitions, config, ops endpoints, compose
 - [x] M2 — polling pipeline, writer, retry buffer, graceful shutdown
 - [x] M3 — fake scenarios, verify, report, T1–T8 driver (all green in quick mode)
-- [ ] M4 — 24 h live pilot (T9) — pilot running since 2026-11-27T17:44:11Z;
-  verification due 2026-11-28T17:44:11Z (runbook in `RUNBOOK.md`)
+- [x] M4 — live pilot, early T9 passed 2026-11-28 (17 h 29 m observed):
+  ≥99.9 % coverage per symbol, 0 drops, 0 duplicates, partitions OK
+  (details in `RUNBOOK.md`)
+
+GitOps is active but service CI is disabled: pushes to `main` do not rebuild or
+redeploy. Builds and deploys are manual from the Northflank service menu.

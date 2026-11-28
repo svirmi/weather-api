@@ -159,6 +159,20 @@ The endpoints are unauthenticated and only issue the read-only SQL above, but
 they are public — treat them as an open data source. `cmd/rawproxy` remains as
 an optional standalone binary for local testing; it is not deployed.
 
+## Local daily report
+
+`cmd/analyze` turns the proxy endpoints into a compact JSON report: per-symbol
+coverage/gaps/duplicates from `/stats`, plus paged spread statistics (mean,
+median, p95, min/max and basis points) for one symbol.
+
+```
+go run ./cmd/analyze --days=1 --symbol=XAUUSDT
+RAWPROXY_URL=http://127.0.0.1:9090 go run ./cmd/analyze --days=7
+```
+
+It defaults to the deployed public URL and streams pages, so a 24 h run needs
+only ~18 requests instead of downloading the whole table at once.
+
 ## Known limitations
 
 RPI orders are invisible in `bookTicker`; `"volume at L1"` means resting
