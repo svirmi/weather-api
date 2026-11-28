@@ -67,6 +67,21 @@ else
   record T2 0 "$(grep -E 'FAIL' /tmp/metals-t2.log | tr '\n' ';' | head -c 400)"
 fi
 
+# ---- T9: API contention drill ---------------------------------------------
+# The data APIs use a 2-connection pool; hammering /stats must not starve the
+# writer and start dropping ticks.
+for _ in $(seq 1 8); do
+  (for _ in $(seq 1 40); do
+     curl -fsS --max-time 12 http://127.0.0.1:9090/api/v1/stats >/dev/null 2>&1 || true
+   done) &
+done
+sleep 30
+wait
+dropped_drill="$(mget dropped_ticks_total)"
+ok=0
+awk -v d="${dropped_drill:-0}" 'BEGIN {exit !(d==0)}' && ok=1
+record T9 "$ok" "dropped=${dropped_drill:-0} after 320 concurrent /stats calls"
+
 # ---- T3: fault scenarios --------------------------------------------------
 for scenario in ban429 ban418 missing garbage timeout stale; do
   export FAKE_SCENARIO="$scenario"

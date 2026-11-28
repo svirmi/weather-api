@@ -107,10 +107,28 @@ func serve(_ []string, doMigrate bool, log *slog.Logger) error {
 		return fmt.Errorf("connect pool: %w", err)
 	}
 	defer pool.Close()
+
+	// The read-only APIs get their own small pool. Public query traffic can
+	// never starve the writer's checkout or its final flush.
+	apiPoolCfg, err := pgxpool.ParseConfig(cfg.DBDSN)
+	if err != nil {
+		return fmt.Errorf("parse API pool DSN: %w", err)
+	}
+	apiPoolCfg.MaxConns = 2
+	apiPoolCfg.MinConns = 0
+	apiPool, err := pgxpool.NewWithConfig(ctx, apiPoolCfg)
+	if err != nil {
+		return fmt.Errorf("connect API pool: %w", err)
+	}
+	defer apiPool.Close()
+
 	pingCtx, cancelPing := context.WithTimeout(ctx, 5*time.Second)
 	defer cancelPing()
 	if err := pool.Ping(pingCtx); err != nil {
 		return fmt.Errorf("ping database: %w", err)
+	}
+	if err := apiPool.Ping(pingCtx); err != nil {
+		return fmt.Errorf("ping API database: %w", err)
 	}
 
 	if doMigrate {
@@ -126,15 +144,19 @@ func serve(_ []string, doMigrate bool, log *slog.Logger) error {
 	reg := registerMetrics(cfg)
 	opsSrv := ops.NewServer(cfg.MetricsAddr, reg, log)
 
-	// The read-only data proxy and pair-spread API share this server and pool
-	// so they need no second service, port, image, or secret.
+	// The read-only data proxy and pair-spread API share this ops server but
+	// use a dedicated pool, so public queries cannot starve the writer.
 	apiMux := http.NewServeMux()
-	rawproxy.NewHandler(rawproxy.NewStore(pool), time.Now, rawproxy.NewMetrics()).RegisterAPI(apiMux)
+	rawMetrics := rawproxy.NewMetrics()
+	rawproxy.NewHandler(rawproxy.NewStore(apiPool), time.Now, rawMetrics).RegisterAPI(apiMux)
+	apiMux.Handle("/api/v1/rawproxy-metrics", rawMetrics.Handler())
+	spreadMetrics := spread.NewMetrics()
 	spread.NewHandler(
-		spread.NewStore(pool),
+		spread.NewStore(apiPool),
 		spread.NewCache(60*time.Second, time.Now),
-		time.Now, 1000, spread.NewMetrics(),
+		time.Now, 1000, spreadMetrics,
 	).RegisterAPI(apiMux)
+	apiMux.Handle("/api/v1/spread-metrics", spreadMetrics.Handler())
 	opsSrv.Mount("/api/v1/", rawproxy.DefaultMiddleware(apiMux))
 
 	if err := opsSrv.Start(); err != nil {
@@ -200,14 +222,15 @@ func serve(_ []string, doMigrate bool, log *slog.Logger) error {
 	<-clockDone
 	<-mgrDone
 
-	// Final flush must use a fresh context: ctx is already cancelled.
+	// Final flush must use a fresh context: ctx is already cancelled. Stop
+	// serving API requests first so none can hold a connection during it.
 	fctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := writer.Stop(fctx); err != nil {
-		log.Error("final flush failed", "err", err, "buffered", writer.Buffered())
-	}
 	if err := opsSrv.Shutdown(fctx); err != nil {
 		log.Error("ops shutdown failed", "err", err)
+	}
+	if err := writer.Stop(fctx); err != nil {
+		log.Error("final flush failed", "err", err, "buffered", writer.Buffered())
 	}
 	log.Info("shutdown complete", "buffered", writer.Buffered())
 	return nil

@@ -112,9 +112,7 @@ func (m *Metrics) record(path string, failed, cacheHit bool, elapsed time.Durati
 	if cacheHit {
 		m.cacheHits++
 	}
-	if ms := float64(elapsed) / float64(time.Millisecond); ms > m.lastQueryMS {
-		m.lastQueryMS = ms
-	}
+	m.lastQueryMS = float64(elapsed) / float64(time.Millisecond)
 }
 
 // Handler serves the metrics in plain text on the API's own port.

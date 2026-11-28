@@ -7,6 +7,25 @@ import (
 	"metals-collector/internal/model"
 )
 
+func TestRingPushCompactsWithoutAck(t *testing.T) {
+	r := NewRing(3)
+	for i := 1; i <= 1000; i++ {
+		r.Push(model.Row{Symbol: "S", TS: time.Unix(int64(i), 0)})
+	}
+	if got := r.Len(); got != 3 {
+		t.Fatalf("Len = %d, want 3", got)
+	}
+	if len(r.rows) > 6 {
+		t.Fatalf("backing slice = %d, want <= 6 (bounded by cap)", len(r.rows))
+	}
+	if r.Dropped() != 997 {
+		t.Fatalf("Dropped = %d, want 997", r.Dropped())
+	}
+	if rows := r.Snapshot(); rows[0].TS.Unix() != 998 || rows[2].TS.Unix() != 1000 {
+		t.Fatalf("snapshot = %v", rows)
+	}
+}
+
 func TestRingDropOldestAndAck(t *testing.T) {
 	r := NewRing(3)
 	for i := 1; i <= 4; i++ {

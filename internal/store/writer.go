@@ -15,6 +15,10 @@ import (
 	"metals-collector/internal/ops"
 )
 
+// flushTimeout caps a single flush attempt (including partition repair) so a
+// blocked pool checkout cannot stall the writer goroutine indefinitely.
+const flushTimeout = 3 * time.Second
+
 const insertSQL = `
 INSERT INTO book_l1 (ts_sec, symbol, exch_time, bid, bid_qty, ask, ask_qty)
 VALUES ($1,$2,$3,$4::numeric,$5::numeric,$6::numeric,$7::numeric)
@@ -42,6 +46,20 @@ func (r *Ring) Push(row model.Row) {
 		r.dropped++
 	}
 	r.rows = append(r.rows, row)
+	// Compaction must happen on the push path too: during a database outage
+	// Ack is never called, so without this the slice would grow with outage
+	// duration instead of staying near cap.
+	r.compact()
+}
+
+// compact drops acknowledged rows from the front once they dominate the
+// backing slice. It is safe to call from both Push and Ack.
+func (r *Ring) compact() {
+	if r.head >= r.cap && r.head*2 >= len(r.rows) {
+		copy(r.rows, r.rows[r.head:])
+		r.rows = r.rows[:len(r.rows)-r.head]
+		r.head = 0
+	}
 }
 
 func (r *Ring) Len() int { return len(r.rows) - r.head }
@@ -62,11 +80,7 @@ func (r *Ring) Ack(n int) {
 		r.rows = r.rows[:0]
 		return
 	}
-	if r.head > 4096 && r.head*2 >= len(r.rows) {
-		copy(r.rows, r.rows[r.head:])
-		r.rows = r.rows[:len(r.rows)-r.head]
-		r.head = 0
-	}
+	r.compact()
 }
 
 // Writer batches rows into one transaction per flush. A failed flush keeps
@@ -153,18 +167,20 @@ func (w *Writer) flush(ctx context.Context) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	flushCtx, cancel := context.WithTimeout(ctx, flushTimeout)
+	defer cancel()
 	start := time.Now()
 	var err error
 	for attempt := 0; attempt < 2; attempt++ {
-		err = w.insert(ctx, rows)
+		err = w.insert(flushCtx, rows)
 		if err == nil {
 			break
 		}
-		if !isMissingPartition(err) || w.mgr == nil || ctx.Err() != nil {
+		if !isMissingPartition(err) || w.mgr == nil || flushCtx.Err() != nil {
 			break
 		}
 		w.log.Warn("missing partition; repairing", "ts", rows[0].TS)
-		if repairErr := w.mgr.Repair(ctx, rows[0].TS); repairErr != nil {
+		if repairErr := w.mgr.Repair(flushCtx, rows[0].TS); repairErr != nil {
 			return repairErr
 		}
 	}

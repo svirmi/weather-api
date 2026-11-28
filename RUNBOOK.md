@@ -14,11 +14,14 @@ Calling the binary with no subcommand defaults to `run`, which also migrates,
 so platforms that launch the image with no arguments still self-initialise.
 The container is distroless: no shell, no curl. All probes use the binary.
 
-Port 9090 is published on all host interfaces (`"9090:9090"`), so `/healthz`
-and `/metrics` are reachable from the Northflank ingress. The metrics are
-non-sensitive operational counters. Northflank terminates TLS at the edge and
-routes plain HTTP to container port 9090, so the public URL is
-`https://<generated-host>/metrics` — do **not** append `:9090` to it.
+Port 9090 is published on all host interfaces (`"9090:9090"`) and the
+Northflank port is currently **public with no credentials**. It now serves the
+whole `/api/v1/*` read-only data surface, not just non-sensitive counters —
+treat the public URL as an open data source. Northflank terminates TLS at the
+edge and routes plain HTTP to container port 9090, so the public URL is
+`https://<generated-host>/metrics` — do **not** append `:9090` to it. Before
+exposing this widely, either make the port private or enable platform
+basic-auth/SSO on it.
 
 ## Verification
 
@@ -105,14 +108,14 @@ template describing the remote pilot:
 3. A combined service (`weather-api`) built from this repo on `main`, public
    HTTP port 9090, 1 instance, **CI disabled**, build cache disabled.
 
-One-time setup: create a template linked to this repository/branch `main`, path
-`/northflank.json`, with GitOps enabled but **run automatically when the
-template is updated disabled**. Both triggers are off: service CI
-(`disabledCI: true`) and template autorun (`options.autorun: false`). Pushes to
-`main` no longer restart the pilot. To ship a change, trigger a build manually
-from the service menu, then deploy that build (confirm in the UI whether a
-manual build on a combined service deploys automatically). The collector's
-`run` subcommand self-migrates a fresh addon database automatically.
+One-time setup: create a template linked to this repository/branch `main` with
+path `/northflank.json`. GitOps is linked, but **template autorun is disabled**
+(`options.autorun: false`) and **service CI is disabled** (`disabledCI: true`,
+`ciIgnoreFlagsEnabled: true`). Pushes to `main` do not rebuild or redeploy the
+pilot. To ship a change, trigger a build manually from the service menu, then
+deploy that build (confirm in the UI whether a manual build on a combined
+service deploys automatically). The collector's `run` subcommand self-migrates
+a fresh addon database automatically.
 
 The commit that switches `autorun` off may itself be the last automatic template
 run, so expect one final restart when you apply this change. Make template
@@ -153,12 +156,17 @@ same public URL as `/healthz` and `/metrics`, for example:
 - `/api/v1/stats?from=…&to=…` — one shot with per-symbol row counts, first/last
   ts, max gap, duplicates, `bid<ask` ratio and partition state. This covers all
   DB-backed T9 checks without pulling ~235 k rows locally.
-- `/api/v1/sessions`, `/api/v1/metrics`.
+- `/api/v1/sessions`.
 
 The pair-spread API used by `tools/spread-view/index.html` is also mounted on
 the same server: `/api/v1/spread?pair=XAU-XAG&range=1d` and
 `/api/v1/spread/live?pair=XAU-XAG&after=<ts>`. Open the page directly — it
 defaults to the deployed public URL, or override with `?api=<base-url>`.
+
+API-specific counters are exposed at `/api/v1/rawproxy-metrics` and
+`/api/v1/spread-metrics` (including `spread_last_query_ms`). The data APIs use
+their own `pgxpool` with `MaxConns=2` so public queries cannot starve the
+writer's pool.
 
 The endpoints are unauthenticated and only issue the read-only SQL above, but
 they are public — treat them as an open data source. `cmd/rawproxy` remains as
