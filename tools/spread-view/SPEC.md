@@ -17,6 +17,8 @@ the two pairs captured by the 1 Hz L1 pilot:
 The pilot's deployed Go collector is the data owner, but this tool must not modify
 or endanger it. Data is served by a **new small read-only Go service** that is run
 locally first and deployed as a separate container only after the page is tuned.
+The stability rules that keep future development out of the collector are in
+§12.
 
 ### In scope
 
@@ -492,3 +494,80 @@ JavaScript, plain `<canvas>` rendering, no CDN, no build step. Open via
    new secret, and an authenticated Northflank service.
 
 No step modifies the pilot collector, schema, retention, or acceptance tests.
+The §12 guardrails (read-only role, bounded pool/timeouts, contract tests, API
+health/metrics) belong to steps 1–4, not to the deferred deployment step. The
+read-only role must exist before any local smoke test touches the pilot DB.
+
+---
+
+## 12. Stability foundation
+
+Decided 2026-11-28. Purpose: keep future development from causing collector
+restarts and therefore data gaps.
+
+### 12.1 Freeze policy
+
+- **The collector is frozen from now**, including before T9 passes. It remains
+  ingestion-only; no viewer, API, or analytics features go into it.
+- The only permitted collector change is an emergency fix for a live data-loss
+  bug, with explicit sign-off, a scheduled window, and a verification run
+  afterwards. Cosmetic, refactor and feature changes are not sufficient reason.
+- Budget: ≥99.5 % coverage per symbol-day allows at most
+  `86400 × 0.005 = 432 s` (7.2 min) of gap per day. One redeploy costs roughly
+  20–40 s (container swap, pool connect, `migrate`, `Ensure`, `AssertStartup`
+  with up to 15 one-second retries). Frequent deploys are the failure mode.
+- All change frequency moves to the consumers: the read API service and the
+  local page. Neither can write to `book_l1` nor restart the collector.
+
+### 12.2 API contract
+
+- The stable v1 surface is **only** `/api/v1/spread` and
+  `/api/v1/spread/live` at launch. No generic L1 query, bars, or analytics
+  endpoints yet; add them later through the change procedure below.
+- Versions live in the path (`/api/v1/...`). **Breaking changes are allowed**,
+  but only through a coordinated upgrade:
+  1. record the intended change in the change log (§12.5);
+  2. update the API, the page and any other consumers in the same change;
+  3. update the golden contract fixtures/tests in the same commit;
+  4. run hermetic tests plus the local smoke test;
+  5. manually deploy the API; the collector is untouched.
+- If any consumer cannot be upgraded in the same change, do **not** break v1 —
+  publish the new shape under a new path version instead.
+- Silent changes (response shape, field type, units, timestamps, error codes)
+  are forbidden. Consumers may ignore unknown fields, but must never guess at
+  changed ones.
+- The storage contract (`book_l1`, `ts_sec` alignment, PK, retention) is part of
+  the freeze: no schema or pipeline changes for this work.
+
+### 12.3 Guardrails (all required)
+
+- **Read-only DB access:** dedicated `spread_ro` role with `SELECT` on
+  `book_l1` and a new secret (§7.3); no `migrate.Run`, no DDL, no writes.
+- **Query isolation:** small pgx pool (`MaxConns` 2–4), `statement_timeout`
+  enforced via context (10 s history, 3 s live), explicit time bounds on every
+  query (including `latest`), both-leg range predicates, and the 60 s history
+  cache. Analytics work must not starve the collector's writer.
+- **Golden contract tests:** hermetic, sub-second, DSN-free tests under
+  `internal/spread` that assert the exact v1 JSON shape with fixed fixture
+  rows. They run inside pilot T1 (`go test ./...`) and must be updated in the
+  same commit as an intentional breaking change.
+- **API health and metrics:** `/healthz` (§5.4) plus a small local `/metrics`
+  on the same port (request counts, errors, cache hits, last query duration).
+  Implement these in the API service itself; do not import the collector's ops
+  package or bind its 9090 port.
+
+### 12.4 Deployment workflow
+
+- Collector: manual build/deploy only, in a scheduled window, after
+  verification. CI and template autorun remain disabled (`disabledCI: true`,
+  `autorun: false`).
+- API: separate image and service, also deployed manually; coordinated with
+  any page update that depends on a breaking contract change.
+- Page: a local file in `tools/spread-view/`; change as often as needed, no
+  deployment or restart involved.
+
+### 12.5 Change log
+
+| Date | Change | Contract impact |
+|---|---|---|
+| 2026-11-28 | Foundation defined: collector frozen, v1 = spread endpoints only, coordinated-breaking-change policy, guardrails above | none — API not yet implemented |
