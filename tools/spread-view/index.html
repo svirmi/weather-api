@@ -89,6 +89,7 @@
 
 <div class="strip" id="health">health: connecting…</div>
 <div class="strip" id="sessions">sessions: loading…</div>
+<div class="strip" id="extremes">extremes: loading…</div>
 
 <div class="panel">
   <div class="ranges" id="ranges">
@@ -135,6 +136,7 @@ const state = {
   l1: {},
   health: null,
   sessions: [],
+  extremes: null,
   cursors: {},
   latestByPair: {},
   pollTimer: null,
@@ -249,6 +251,7 @@ function setRange(id) {
   [...$("ranges").children].forEach((b) => b.classList.toggle("active", b.dataset.range === id));
   if (id === "LIVE") pollLive();
   else loadHistory();
+  loadExtremes();
 }
 
 function setPair(id) {
@@ -257,6 +260,7 @@ function setPair(id) {
   [...document.querySelectorAll(".toggle button")].forEach((b) => b.classList.toggle("active", b.dataset.pair === id));
   if (state.range === "LIVE") pollLive();
   else loadHistory();
+  loadExtremes();
 }
 
 function renderCards() {
@@ -360,6 +364,37 @@ function renderSessions() {
   const fmt = (t) => new Date(Number(t) * 1000).toLocaleString();
   el.innerHTML = '<span>session <b>' + s.kind + '</b></span>' +
                  '<span>' + fmt(s.start) + ' → ' + fmt(s.end) + '</span>';
+}
+
+async function loadExtremes() {
+  const range = state.range === "LIVE" ? "1h" : state.range;
+  try {
+    const url = API + "/api/v1/spread/extremes?pair=" + encodeURIComponent(state.pair) +
+                "&range=" + encodeURIComponent(range);
+    const r = await getJSON(url);
+    state.extremes = (r.min && r.max) ? r : null;
+  } catch (e) {
+    state.extremes = null;
+  }
+  renderExtremes();
+  render();
+}
+
+function renderExtremes() {
+  const el = $("extremes");
+  const r = state.extremes;
+  if (!r) { el.innerHTML = '<span>extremes: <b>Not enough data</b></span>'; return; }
+  const line = (label, p, cls) => {
+    const utc = new Date(Number(p.ts) * 1000).toISOString();
+    return '<span class="' + cls + '">' + label + ' <b>' + utc + '</b> ' +
+           'ratio <b>' + Number(p.ratio).toFixed(6) + '</b> ' +
+           'ask A <b>' + Number(p.price_a).toFixed(4) + '</b> ' +
+           'ask B <b>' + Number(p.price_b).toFixed(4) + '</b></span>';
+  };
+  const gapMin = Math.min(r.min.ts, r.max.ts), gapMax = Math.max(r.min.ts, r.max.ts);
+  el.innerHTML = line("min", r.min, "ok") + line("max", r.max, "bad") +
+    '<span>range <b>' + Number(r.range_pct).toFixed(2) + '%</b></span>' +
+    '<span>gap <b>' + (gapMax - gapMin) + 's</b></span>';
 }
 
 function prep(canvas) {
@@ -481,6 +516,25 @@ function draw(canvas, points, kind) {
       if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     });
     ctx.stroke();
+  }
+
+  if (kind === "main" && state.extremes) {
+    for (const [key, color] of [["min", "#34d399"], ["max", "#f87171"]]) {
+      const p = state.extremes[key];
+      if (!p || p.ts < t0 || p.ts > t1) continue;
+      const x = xForT(p.ts), y = yForV(Number(p.ratio));
+      ctx.beginPath();
+      ctx.arc(x, y, 5, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.strokeStyle = "#020617";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.fillStyle = color;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "bottom";
+      ctx.fillText(key.toUpperCase(), x, y - 8);
+    }
   }
 
   if (state.hover != null && state.hover < points.length) {

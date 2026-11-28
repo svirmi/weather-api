@@ -45,6 +45,46 @@ GROUP BY 1
 ORDER BY 1
 `
 
+// Extremes use the same cycle-aligned, both-leg range predicates as history.
+// Both bid and ask must be positive; the ratio basis remains ask/ask.
+const extremesLegsSQL = `
+WITH legs AS (
+  SELECT a.ts_sec,
+         a.ask AS ask_a,
+         b.ask AS ask_b,
+         a.ask / b.ask AS r
+  FROM book_l1 a
+  JOIN book_l1 b USING (ts_sec)
+  WHERE a.symbol = $1 AND b.symbol = $2
+    AND a.ts_sec >= $3 AND a.ts_sec < $4
+    AND b.ts_sec >= $3 AND b.ts_sec < $4
+    AND a.bid > 0 AND a.ask > 0 AND b.bid > 0 AND b.ask > 0
+)`
+
+const extremesCountSQL = extremesLegsSQL + `
+SELECT count(*) FROM legs
+`
+
+const extremesMinSQL = extremesLegsSQL + `
+SELECT extract(epoch FROM ts_sec)::bigint AS t,
+       r::double precision AS ratio,
+       ask_a::double precision AS ask_a,
+       ask_b::double precision AS ask_b
+FROM legs
+ORDER BY r ASC, ts_sec ASC
+LIMIT 1
+`
+
+const extremesMaxSQL = extremesLegsSQL + `
+SELECT extract(epoch FROM ts_sec)::bigint AS t,
+       r::double precision AS ratio,
+       ask_a::double precision AS ask_a,
+       ask_b::double precision AS ask_b
+FROM legs
+ORDER BY r DESC, ts_sec ASC
+LIMIT 1
+`
+
 const liveSelectSQL = `
 SELECT extract(epoch FROM a.ts_sec)::bigint AS t,
        a.ask::double precision AS ask_a,
@@ -160,6 +200,40 @@ func (s *Store) Latest(ctx context.Context, pair Pair) (*Latest, error) {
 		return nil, err
 	}
 	return &latest, nil
+}
+
+// Extremes returns the earliest-timestamp minimum and maximum ask/ask ratio
+// in the window, plus the number of aligned points used.
+func (s *Store) Extremes(ctx context.Context, pair Pair, preset Preset, from, to time.Time) (int64, *Point, *Point, error) {
+	ctx, cancel := context.WithTimeout(ctx, historyTimeout)
+	defer cancel()
+	args := []any{pair.Num, pair.Den, from, to}
+
+	var n int64
+	if err := s.Pool.QueryRow(ctx, extremesCountSQL, args...).Scan(&n); err != nil {
+		return 0, nil, nil, err
+	}
+	if n < 2 {
+		return n, nil, nil, nil
+	}
+	minPoint, err := scanExtreme(ctx, s.Pool, extremesMinSQL, args)
+	if err != nil {
+		return n, nil, nil, err
+	}
+	maxPoint, err := scanExtreme(ctx, s.Pool, extremesMaxSQL, args)
+	if err != nil {
+		return n, nil, nil, err
+	}
+	return n, minPoint, maxPoint, nil
+}
+
+func scanExtreme(ctx context.Context, pool *pgxpool.Pool, sql string, args []any) (*Point, error) {
+	var p Point
+	if err := pool.QueryRow(ctx, sql, args...).Scan(&p.T, &p.Ratio, &p.AskA, &p.AskB); err != nil {
+		return nil, err
+	}
+	p.N = 1
+	return &p, nil
 }
 
 // ScanHistoryRow decodes one history row in the column order of historySQL.

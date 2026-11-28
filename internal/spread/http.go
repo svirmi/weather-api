@@ -15,10 +15,12 @@ import (
 )
 
 const (
-	historyPath = "/api/v1/spread"
-	livePath    = "/api/v1/spread/live"
-	cacheTTL    = 60 * time.Second
-	maxCacheKey = 10
+	historyPath   = "/api/v1/spread"
+	livePath      = "/api/v1/spread/live"
+	extremesPath  = "/api/v1/spread/extremes"
+	cacheTTL      = 60 * time.Second
+	maxCacheKey   = 10
+	extremesBasis = "ask"
 )
 
 // StoreReader is the Read side used by the handlers. A fixture-backed fake in
@@ -27,6 +29,7 @@ type StoreReader interface {
 	History(ctx context.Context, pair Pair, preset Preset, from, to time.Time) ([]Point, error)
 	Live(ctx context.Context, pair Pair, after int64) ([]LivePoint, error)
 	Latest(ctx context.Context, pair Pair) (*Latest, error)
+	Extremes(ctx context.Context, pair Pair, preset Preset, from, to time.Time) (int64, *Point, *Point, error)
 }
 
 // Clock is injected so cache and timestamp behaviour can be tested without
@@ -34,6 +37,7 @@ type StoreReader interface {
 type Clock func() time.Time
 
 type cacheKey struct {
+	Kind  string
 	Pair  string
 	Range string
 }
@@ -173,6 +177,7 @@ func NewHandler(store StoreReader, cache *Cache, now Clock, pollMS int, metrics 
 func (h *Handler) RegisterAPI(mux *http.ServeMux) {
 	mux.HandleFunc(historyPath, h.handleHistory)
 	mux.HandleFunc(livePath, h.handleLive)
+	mux.HandleFunc(extremesPath, h.handleExtremes)
 }
 
 // Register attaches the v1 routes to a mux. CORS is applied by the caller.
@@ -215,7 +220,7 @@ func (h *Handler) handleHistory(w http.ResponseWriter, r *http.Request) {
 
 	to := h.Now().UTC()
 	from := to.Add(-preset.Window)
-	key := cacheKey{Pair: pair.ID, Range: preset.Name}
+	key := cacheKey{Kind: "history", Pair: pair.ID, Range: preset.Name}
 	if body, ok := h.Cache.Get(key); ok {
 		h.Metrics.record(historyPath, false, true, 0)
 		writeBody(w, body)
@@ -247,6 +252,69 @@ func (h *Handler) handleHistory(w http.ResponseWriter, r *http.Request) {
 	}
 	h.Cache.Put(key, body)
 	h.Metrics.record(historyPath, false, false, elapsed)
+	writeBody(w, body)
+}
+
+func (h *Handler) handleExtremes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+		return
+	}
+	pair, err := ParsePair(r.URL.Query().Get("pair"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	preset, err := ParsePreset(r.URL.Query().Get("range"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	to := h.Now().UTC()
+	from := to.Add(-preset.Window)
+	key := cacheKey{Kind: "extremes", Pair: pair.ID, Range: preset.Name}
+	if body, ok := h.Cache.Get(key); ok {
+		h.Metrics.record(extremesPath, false, true, 0)
+		writeBody(w, body)
+		return
+	}
+
+	start := h.Now()
+	n, minPoint, maxPoint, err := h.Store.Extremes(r.Context(), pair, preset, from, to)
+	elapsed := h.Now().Sub(start)
+	if err != nil {
+		h.Metrics.record(extremesPath, true, false, elapsed)
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if n < 2 || minPoint == nil || maxPoint == nil {
+		h.Metrics.record(extremesPath, true, false, elapsed)
+		writeError(w, http.StatusUnprocessableEntity, errors.New("not enough data"))
+		return
+	}
+
+	toExtreme := func(p *Point) *ExtremesPoint {
+		return &ExtremesPoint{TS: p.T, Ratio: p.Ratio, PriceA: p.AskA, PriceB: p.AskB}
+	}
+	min, max := toExtreme(minPoint), toExtreme(maxPoint)
+	resp := ExtremesResponse{
+		Pair:     pair.ID,
+		Range:    preset.Name,
+		Basis:    extremesBasis,
+		Points:   n,
+		Min:      min,
+		Max:      max,
+		RangePct: 100 * (max.Ratio/min.Ratio - 1),
+	}
+	body, err := json.Marshal(resp)
+	if err != nil {
+		h.Metrics.record(extremesPath, true, false, elapsed)
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	h.Cache.Put(key, body)
+	h.Metrics.record(extremesPath, false, false, elapsed)
 	writeBody(w, body)
 }
 

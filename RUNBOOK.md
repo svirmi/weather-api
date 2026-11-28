@@ -160,8 +160,11 @@ same public URL as `/healthz` and `/metrics`, for example:
 
 The pair-spread API used by `tools/spread-view/index.html` is also mounted on
 the same server: `/api/v1/spread?pair=XAU-XAG&range=1d` and
-`/api/v1/spread/live?pair=XAU-XAG&after=<ts>`. Open the page directly — it
-defaults to the deployed public URL, or override with `?api=<base-url>`.
+`/api/v1/spread/live?pair=XAU-XAG&after=<ts>`. Extremes (min/max ask/ask ratio
+with both ask prices, ask basis, earliest-`ts_sec` tie-break) are at
+`/api/v1/spread/extremes?pair=XAU-XAG&range=1d`; periods are the same chart
+presets. Open the page directly — it defaults to the deployed public URL, or
+override with `?api=<base-url>`.
 The same page is now a small dashboard: direct L1 cards for all four symbols
 (from `/api/v1/rows`), a 1 h health strip (`/api/v1/stats`, refreshed every
 60 s to respect the rate limit), and the current session window

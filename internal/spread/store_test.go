@@ -83,6 +83,20 @@ func TestSQLGuards(t *testing.T) {
 	if !strings.Contains(latestSQL, "now() - interval '1 hour'") || !strings.Contains(latestSQL, "ORDER BY a.ts_sec DESC") {
 		t.Errorf("latestSQL missing bound or ordering")
 	}
+	for _, sql := range []string{extremesCountSQL, extremesMinSQL, extremesMaxSQL} {
+		for _, want := range []string{
+			"a.symbol = $1 AND b.symbol = $2",
+			"a.bid > 0 AND a.ask > 0 AND b.bid > 0 AND b.ask > 0",
+		} {
+			if !strings.Contains(sql, want) {
+				t.Errorf("extremes query missing %q", want)
+			}
+		}
+	}
+	if !strings.Contains(extremesMinSQL, "ORDER BY r ASC, ts_sec ASC") ||
+		!strings.Contains(extremesMaxSQL, "ORDER BY r DESC, ts_sec ASC") {
+		t.Error("extremes ordering is not allow-listed")
+	}
 }
 
 func TestArgs(t *testing.T) {

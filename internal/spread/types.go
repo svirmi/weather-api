@@ -116,6 +116,25 @@ type LiveResponse struct {
 	Points []LivePoint `json:"points"`
 }
 
+// ExtremesPoint is one observed extreme with both ask prices at that second.
+type ExtremesPoint struct {
+	TS     int64   `json:"ts"`
+	Ratio  float64 `json:"ratio"`
+	PriceA float64 `json:"price_a"`
+	PriceB float64 `json:"price_b"`
+}
+
+// ExtremesResponse is the v1 response of GET /api/v1/spread/extremes.
+type ExtremesResponse struct {
+	Pair     string         `json:"pair"`
+	Range    string         `json:"range"`
+	Basis    string         `json:"basis"`
+	Points   int64          `json:"points"`
+	Min      *ExtremesPoint `json:"min"`
+	Max      *ExtremesPoint `json:"max"`
+	RangePct float64        `json:"range_pct"`
+}
+
 // ErrorResponse is the v1 error body.
 type ErrorResponse struct {
 	Error string `json:"error"`

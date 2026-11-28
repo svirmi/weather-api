@@ -16,10 +16,13 @@ type fakeStore struct {
 	history []Point
 	live    []LivePoint
 	latest  *Latest
+	points  int64
+	min     *Point
+	max     *Point
 
-	histErr, liveErr, latestErr error
-	historyCalls, liveCalls     int
-	latestCalls                 int
+	histErr, liveErr, latestErr, extremesErr error
+	historyCalls, liveCalls                  int
+	latestCalls, extremesCalls               int
 }
 
 func (f *fakeStore) History(_ context.Context, _ Pair, _ Preset, _, _ time.Time) ([]Point, error) {
@@ -35,6 +38,11 @@ func (f *fakeStore) Live(_ context.Context, _ Pair, _ int64) ([]LivePoint, error
 func (f *fakeStore) Latest(_ context.Context, _ Pair) (*Latest, error) {
 	f.latestCalls++
 	return f.latest, f.latestErr
+}
+
+func (f *fakeStore) Extremes(_ context.Context, _ Pair, _ Preset, _, _ time.Time) (int64, *Point, *Point, error) {
+	f.extremesCalls++
+	return f.points, f.min, f.max, f.extremesErr
 }
 
 func newTestHandler(store StoreReader, now *time.Time) (*Handler, *http.ServeMux) {
@@ -99,6 +107,48 @@ func TestHistoryContract(t *testing.T) {
 		t.Fatalf("points = %#v", obj["points"])
 	}
 	assertKeys(t, points[0].(map[string]any), "t", "n", "ratio", "lo", "hi", "last", "askA", "askB")
+}
+
+func TestExtremesContract(t *testing.T) {
+	now := time.Date(2026, 11, 28, 8, 0, 0, 0, time.UTC)
+	store := &fakeStore{
+		points: 100,
+		min:    &Point{T: 1000, N: 1, Ratio: 80, AskA: 4000, AskB: 50},
+		max:    &Point{T: 2000, N: 1, Ratio: 90, AskA: 4500, AskB: 50},
+	}
+	_, mux := newTestHandler(store, &now)
+
+	// A history call for the same pair/range must not collide with extremes.
+	request(t, mux, http.MethodGet, "/api/v1/spread?pair=XAU-XAG&range=1d")
+	rec := request(t, mux, http.MethodGet, "/api/v1/spread/extremes?pair=XAU-XAG&range=1d")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	obj := object(t, rec)
+	assertKeys(t, obj, "pair", "range", "basis", "points", "min", "max", "range_pct")
+	if obj["basis"] != "ask" || obj["points"] != float64(100) || obj["range_pct"] != 12.5 {
+		t.Errorf("extremes = %#v", obj)
+	}
+	min := obj["min"].(map[string]any)
+	assertKeys(t, min, "ts", "ratio", "price_a", "price_b")
+	if min["ts"] != float64(1000) || min["price_a"] != float64(4000) || min["price_b"] != float64(50) {
+		t.Errorf("min = %#v", min)
+	}
+
+	request(t, mux, http.MethodGet, "/api/v1/spread/extremes?pair=XAU-XAG&range=1d")
+	if store.extremesCalls != 1 {
+		t.Errorf("extremes calls = %d, want 1 (cached)", store.extremesCalls)
+	}
+}
+
+func TestExtremesNotEnoughData(t *testing.T) {
+	now := time.Date(2026, 11, 28, 8, 0, 0, 0, time.UTC)
+	_, mux := newTestHandler(&fakeStore{points: 1}, &now)
+	rec := request(t, mux, http.MethodGet, "/api/v1/spread/extremes?pair=XPT-XPD&range=1h")
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	assertKeys(t, object(t, rec), "error")
 }
 
 func TestEmptyHistoryIsArray(t *testing.T) {
