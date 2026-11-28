@@ -137,6 +137,7 @@ const state = {
   health: null,
   sessions: [],
   extremes: null,
+  extremesError: null,
   cursors: {},
   latestByPair: {},
   pollTimer: null,
@@ -368,13 +369,17 @@ function renderSessions() {
 
 async function loadExtremes() {
   const range = state.range === "LIVE" ? "1h" : state.range;
+  state.extremes = null;
+  state.extremesError = null;
   try {
     const url = API + "/api/v1/spread/extremes?pair=" + encodeURIComponent(state.pair) +
                 "&range=" + encodeURIComponent(range);
     const r = await getJSON(url);
     state.extremes = (r.min && r.max) ? r : null;
   } catch (e) {
-    state.extremes = null;
+    const msg = String((e && e.message) || e);
+    state.extremesError = msg.includes("422") ? "Not enough data" :
+                          msg.includes("404") ? "endpoint not deployed" : msg;
   }
   renderExtremes();
   render();
@@ -383,7 +388,11 @@ async function loadExtremes() {
 function renderExtremes() {
   const el = $("extremes");
   const r = state.extremes;
-  if (!r) { el.innerHTML = '<span>extremes: <b>Not enough data</b></span>'; return; }
+  if (!r) {
+    el.innerHTML = '<span>extremes: <b class="bad">' +
+                   (state.extremesError || "Not enough data") + '</b></span>';
+    return;
+  }
   const line = (label, p, cls) => {
     const utc = new Date(Number(p.ts) * 1000).toISOString();
     return '<span class="' + cls + '">' + label + ' <b>' + utc + '</b> ' +
