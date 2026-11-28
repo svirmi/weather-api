@@ -162,6 +162,10 @@ The pair-spread API used by `tools/spread-view/index.html` is also mounted on
 the same server: `/api/v1/spread?pair=XAU-XAG&range=1d` and
 `/api/v1/spread/live?pair=XAU-XAG&after=<ts>`. Open the page directly — it
 defaults to the deployed public URL, or override with `?api=<base-url>`.
+The same page is now a small dashboard: direct L1 cards for all four symbols
+(from `/api/v1/rows`), a 1 h health strip (`/api/v1/stats`, refreshed every
+60 s to respect the rate limit), and the current session window
+(`/api/v1/sessions`), alongside the pair-ratio chart.
 
 API-specific counters are mirrored into `/metrics` and are also exposed at
 `/api/v1/rawproxy-metrics` and `/api/v1/spread-metrics` (including
