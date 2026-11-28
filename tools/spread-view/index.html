@@ -385,6 +385,11 @@ async function loadExtremes() {
   render();
 }
 
+function legNames(pairId) {
+  const p = PAIRS[pairId] || PAIRS["XAU-XAG"];
+  return [p.num.replace(/USDT$/, ""), p.den.replace(/USDT$/, "")];
+}
+
 function renderExtremes() {
   const el = $("extremes");
   const r = state.extremes;
@@ -393,12 +398,13 @@ function renderExtremes() {
                    (state.extremesError || "Not enough data") + '</b></span>';
     return;
   }
+  const [nameA, nameB] = legNames(state.pair);
   const line = (label, p, cls) => {
     const utc = new Date(Number(p.ts) * 1000).toISOString();
     return '<span class="' + cls + '">' + label + ' <b>' + utc + '</b> ' +
            'ratio <b>' + Number(p.ratio).toFixed(6) + '</b> ' +
-           'ask A <b>' + Number(p.price_a).toFixed(4) + '</b> ' +
-           'ask B <b>' + Number(p.price_b).toFixed(4) + '</b></span>';
+           nameA + ' <b>' + Number(p.price_a).toFixed(4) + '</b> ' +
+           nameB + ' <b>' + Number(p.price_b).toFixed(4) + '</b></span>';
   };
   const gapMin = Math.min(r.min.ts, r.max.ts), gapMax = Math.max(r.min.ts, r.max.ts);
   el.innerHTML = line("min", r.min, "ok") + line("max", r.max, "bad") +
