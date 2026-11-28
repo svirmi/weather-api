@@ -157,7 +157,19 @@ func serve(_ []string, doMigrate bool, log *slog.Logger) error {
 		time.Now, 1000, spreadMetrics,
 	).RegisterAPI(apiMux)
 	apiMux.Handle("/api/v1/spread-metrics", spreadMetrics.Handler())
-	opsSrv.Mount("/api/v1/", rawproxy.DefaultMiddleware(apiMux))
+
+	// Public port mitigation: a shared token bucket, stricter on /stats because
+	// it runs four sequential queries under one 10 s context.
+	generalLimited := rawproxy.NewRateLimiter(20, 40).Middleware(apiMux)
+	statsLimited := rawproxy.NewRateLimiter(1, 2).Middleware(apiMux)
+	limitedAPI := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/stats" {
+			statsLimited.ServeHTTP(w, r)
+			return
+		}
+		generalLimited.ServeHTTP(w, r)
+	})
+	opsSrv.Mount("/api/v1/", rawproxy.DefaultMiddleware(limitedAPI))
 
 	if err := opsSrv.Start(); err != nil {
 		return fmt.Errorf("start ops server: %w", err)

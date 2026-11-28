@@ -157,6 +157,19 @@ func TestValidation(t *testing.T) {
 	}
 }
 
+func TestRateLimiter(t *testing.T) {
+	limiter := NewRateLimiter(1, 1)
+	h := limiter.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	if rec := request(h, http.MethodGet, "/api/v1/stats"); rec.Code != http.StatusOK {
+		t.Errorf("first request: %d", rec.Code)
+	}
+	if rec := request(h, http.MethodGet, "/api/v1/stats"); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("second request: %d, want 429", rec.Code)
+	}
+}
+
 func TestMetrics(t *testing.T) {
 	_, h := newTestHandler(&fakeStore{})
 	request(h, http.MethodGet, "/api/v1/rows?symbol=XPTUSDT")

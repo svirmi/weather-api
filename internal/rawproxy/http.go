@@ -70,6 +70,51 @@ func DefaultMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// RateLimiter is a simple in-process token bucket. It is a mitigation for the
+// public data port, not a substitute for platform authentication: every client
+// behind the ingress shares the bucket.
+type RateLimiter struct {
+	mu     sync.Mutex
+	tokens float64
+	last   time.Time
+	rate   float64
+	burst  float64
+}
+
+func NewRateLimiter(rate, burst float64) *RateLimiter {
+	if rate <= 0 || burst <= 0 {
+		panic("rate and burst must be positive")
+	}
+	return &RateLimiter{tokens: burst, last: time.Now(), rate: rate, burst: burst}
+}
+
+func (rl *RateLimiter) allow() bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	now := time.Now()
+	rl.tokens += now.Sub(rl.last).Seconds() * rl.rate
+	if rl.tokens > rl.burst {
+		rl.tokens = rl.burst
+	}
+	rl.last = now
+	if rl.tokens < 1 {
+		return false
+	}
+	rl.tokens--
+	return true
+}
+
+// Middleware rejects excess requests with 429 before they reach the DB pool.
+func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !rl.allow() {
+			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // Metrics is a small local registry for the proxy.
 type Metrics struct {
 	mu       sync.Mutex

@@ -169,8 +169,12 @@ their own `pgxpool` with `MaxConns=2` so public queries cannot starve the
 writer's pool.
 
 The endpoints are unauthenticated and only issue the read-only SQL above, but
-they are public — treat them as an open data source. `cmd/rawproxy` remains as
-an optional standalone binary for local testing; it is not deployed.
+they are public — treat them as an open data source. An in-process token bucket
+limits general API traffic to 20 req/s (burst 40) and `/api/v1/stats` to 1 req/s
+(burst 2). This is a mitigation, **not** authentication: all clients behind the
+ingress share the bucket, and a determined caller can still reach the data.
+`cmd/rawproxy` remains as an optional standalone binary for local testing; it
+is not deployed.
 
 ## Local daily report
 
