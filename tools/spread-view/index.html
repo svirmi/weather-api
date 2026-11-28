@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Pair Spread · 1 Hz L1 feed</title>
+<title>Collector Dashboard · Pair Spread</title>
 <style>
   :root {
     --bg: #080d17;
@@ -62,13 +62,21 @@
     padding: 8px 10px; font-size: 12px; color: var(--text);
     white-space: pre; font-variant-numeric: tabular-nums; z-index: 5;
   }
+  .strip {
+    display: flex; gap: 18px; flex-wrap: wrap; align-items: center;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 14px; margin-bottom: 12px; font-size: 12px; color: var(--muted);
+  }
+  .strip b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .strip .ok { color: var(--green); }
+  .strip .bad { color: var(--red); }
   .foot { color: #64748b; font-size: 11px; margin-top: 10px; }
   @media (max-width: 800px) { .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 </style>
 </head>
 <body>
 <header>
-  <h1>Pair Spread · 1 Hz L1 feed</h1>
+  <h1>Collector Dashboard · Pair Spread</h1>
   <div class="toggle">
     <button id="pair-xau" data-pair="XAU-XAG">Gold / Silver</button>
     <button id="pair-xpt" data-pair="XPT-XPD">Platinum / Palladium</button>
@@ -78,6 +86,9 @@
 </header>
 
 <div class="cards" id="cards"></div>
+
+<div class="strip" id="health">health: connecting…</div>
+<div class="strip" id="sessions">sessions: loading…</div>
 
 <div class="panel">
   <div class="ranges" id="ranges">
@@ -121,6 +132,9 @@ const state = {
   history: [],
   bucketSec: 1,
   liveByPair: {},
+  l1: {},
+  health: null,
+  sessions: [],
   cursors: {},
   latestByPair: {},
   pollTimer: null,
@@ -251,9 +265,8 @@ function renderCards() {
   const symbols = ["XAUUSDT", "XAGUSDT", "XPTUSDT", "XPDUSDT"];
   const nowSec = Math.floor(Date.now() / 1000);
   for (const sym of symbols) {
-    const pid = Object.keys(PAIRS).find((p) => PAIRS[p].num === sym || PAIRS[p].den === sym);
-    const latest = lastValue(pid);
-    const value = latest ? (PAIRS[pid].num === sym ? latest.askA : latest.askB) : null;
+    const snap = state.l1[sym];
+    const value = snap ? snap.ask : null;
     const el = document.createElement("div");
     el.className = "card";
     const symEl = document.createElement("div");
@@ -264,9 +277,9 @@ function renderCards() {
     valEl.textContent = value == null ? "no data" : Number(value).toFixed(4);
     const subEl = document.createElement("div");
     subEl.className = "sub";
-    if (latest && value != null) {
-      const age = Math.max(0, nowSec - Number(latest.t));
-      subEl.textContent = age + "s ago";
+    if (snap) {
+      const age = Math.max(0, nowSec - Number(snap.ts));
+      subEl.textContent = "bid " + Number(snap.bid).toFixed(4) + " · " + age + "s ago";
     } else {
       subEl.textContent = "no rows in table";
     }
@@ -278,6 +291,75 @@ function renderCards() {
   const strong = document.createElement("strong");
   strong.textContent = latest ? " " + Number(latest.ratio).toFixed(6) : " —";
   $("badge").append(document.createTextNode(PAIRS[state.pair].short), strong);
+}
+
+async function pollL1() {
+  const now = Math.floor(Date.now() / 1000);
+  const symbols = ["XAUUSDT", "XAGUSDT", "XPTUSDT", "XPDUSDT"];
+  try {
+    const responses = await Promise.all(symbols.map((sym) =>
+      getJSON(API + "/api/v1/rows?symbol=" + sym + "&from=" + (now - 600) +
+              "&to=" + now + "&order=desc&limit=1")));
+    responses.forEach((r, i) => {
+      const row = r.rows && r.rows[0];
+      if (row) state.l1[symbols[i]] = { bid: row.bid, ask: row.ask, ts: row.ts };
+    });
+  } catch (e) {
+    // Keep the last good snapshot; the panel will show its age.
+  }
+  renderCards();
+}
+
+async function loadHealth() {
+  const now = Math.floor(Date.now() / 1000);
+  try {
+    state.health = await getJSON(API + "/api/v1/stats?from=" + (now - 3600) + "&to=" + now);
+  } catch (e) {
+    state.health = null;
+  }
+  renderHealth();
+}
+
+function renderHealth() {
+  const el = $("health");
+  const r = state.health;
+  if (!r) { el.innerHTML = '<span class="bad">health: unavailable</span>'; return; }
+  let minCov = Infinity, dup = 0, ratio = 1, gap = 0;
+  for (const s of r.symbols) {
+    if (!s.rows) continue;
+    minCov = Math.min(minCov, 100 * s.rows / (r.to - r.from));
+    dup += s.duplicates;
+    ratio = Math.min(ratio, s.bid_lt_ask_ratio);
+    gap = Math.max(gap, s.max_gap_sec);
+  }
+  const ok = minCov >= 99.5 && dup === 0 && ratio >= 0.99 && r.future_ok && !r.aged_partitions.length;
+  el.innerHTML =
+    '<span class="' + (ok ? "ok" : "bad") + '">health <b>' + (ok ? "PASS" : "CHECK") + '</b></span>' +
+    '<span>1h coverage <b>' + (isFinite(minCov) ? minCov.toFixed(2) : "—") + '%</b></span>' +
+    '<span>dup <b>' + dup + '</b></span>' +
+    '<span>bid&lt;ask <b>' + ratio.toFixed(4) + '</b></span>' +
+    '<span>max gap <b>' + gap + 's</b></span>' +
+    '<span>partitions <b>' + r.future_partitions + '</b></span>';
+}
+
+async function loadSessions() {
+  const now = Math.floor(Date.now() / 1000);
+  try {
+    const r = await getJSON(API + "/api/v1/sessions?from=" + (now - 86400) + "&to=" + now + "&limit=5");
+    state.sessions = r.rows || [];
+  } catch (e) {
+    state.sessions = [];
+  }
+  renderSessions();
+}
+
+function renderSessions() {
+  const el = $("sessions");
+  const s = state.sessions[0];
+  if (!s) { el.textContent = "sessions: none in last 24h"; return; }
+  const fmt = (t) => new Date(Number(t) * 1000).toLocaleString();
+  el.innerHTML = '<span>session <b>' + s.kind + '</b></span>' +
+                 '<span>' + fmt(s.start) + ' → ' + fmt(s.end) + '</span>';
 }
 
 function prep(canvas) {
@@ -483,6 +565,12 @@ logchart.addEventListener("mouseleave", onLeave);
 window.addEventListener("resize", render);
 
 setRange("LIVE");
+pollL1();
+loadHealth();
+loadSessions();
+setInterval(pollL1, 2000);
+setInterval(loadHealth, 60000);   // /stats is rate-limited to 1 req/s
+setInterval(loadSessions, 300000);
 </script>
 </body>
 </html>
