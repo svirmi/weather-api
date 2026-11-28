@@ -181,6 +181,94 @@
                   "buildArguments": {}
                 },
                 "updateMode": "put"
+              },
+              {
+                "kind": "CombinedService",
+                "spec": {
+                  "name": "rawproxy",
+                  "infrastructure": {
+                    "architecture": "x86"
+                  },
+                  "billing": {
+                    "buildPlan": "nf-compute-400-16",
+                    "deploymentPlan": "nf-compute-10"
+                  },
+                  "deployment": {
+                    "type": "deployment",
+                    "instances": 1,
+                    "gracePeriodSeconds": 30,
+                    "docker": {
+                      "configType": "default"
+                    }
+                  },
+                  "ports": [
+                    {
+                      "name": "p01",
+                      "internalPort": 9092,
+                      "protocol": "HTTP",
+                      "public": true,
+                      "security": {
+                        "credentials": [],
+                        "policies": [],
+                        "sso": {}
+                      }
+                    }
+                  ],
+                  "loadBalancing": {
+                    "mode": "leastConnection"
+                  },
+                  "buildSource": "git",
+                  "disabledCI": true,
+                  "vcsData": {
+                    "projectUrl": "https://github.com/svirmi/weather-api",
+                    "projectType": "github",
+                    "projectBranch": "main",
+                    "accountLogin": "svirmi"
+                  },
+                  "buildSettings": {
+                    "dockerfile": {
+                      "buildEngine": "buildkit",
+                      "dockerFilePath": "/Dockerfile.rawproxy",
+                      "dockerWorkDir": "/",
+                      "buildkit": {
+                        "useCache": false,
+                        "cacheStorageSize": 16384
+                      },
+                      "scan": {
+                        "enabled": false
+                      }
+                    },
+                    "storage": {
+                      "ephemeralStorage": {
+                        "storageSize": 16384
+                      }
+                    }
+                  },
+                  "runtimeEnvironment": {
+                    "RAWPROXY_ADDR": ":9092",
+                    "RAWPROXY_ALLOWED_ORIGINS": "http://127.0.0.1:8080",
+                    "LOG_LEVEL": "info"
+                  },
+                  "healthChecks": [
+                    {
+                      "protocol": "HTTP",
+                      "type": "livenessProbe",
+                      "path": "/healthz",
+                      "port": 9092,
+                      "initialDelaySeconds": 15,
+                      "periodSeconds": 30,
+                      "timeoutSeconds": 3,
+                      "failureThreshold": 3
+                    }
+                  ],
+                  "buildConfiguration": {
+                    "pathIgnoreRules": [],
+                    "isAllowList": false,
+                    "ciIgnoreFlagsEnabled": true
+                  },
+                  "buildArguments": {}
+                },
+                "updateMode": "put"
               }
             ]
           }
