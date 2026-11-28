@@ -163,18 +163,16 @@ the same server: `/api/v1/spread?pair=XAU-XAG&range=1d` and
 `/api/v1/spread/live?pair=XAU-XAG&after=<ts>`. Open the page directly — it
 defaults to the deployed public URL, or override with `?api=<base-url>`.
 
-API-specific counters are exposed at `/api/v1/rawproxy-metrics` and
-`/api/v1/spread-metrics` (including `spread_last_query_ms`). The data APIs use
-their own `pgxpool` with `MaxConns=2` so public queries cannot starve the
-writer's pool.
+API-specific counters are mirrored into `/metrics` and are also exposed at
+`/api/v1/rawproxy-metrics` and `/api/v1/spread-metrics` (including
+`spread_last_query_ms`). The data APIs use their own `pgxpool` with
+`MaxConns=2` so public queries cannot starve the writer's pool.
 
 The endpoints are unauthenticated and only issue the read-only SQL above, but
 they are public — treat them as an open data source. An in-process token bucket
 limits general API traffic to 20 req/s (burst 40) and `/api/v1/stats` to 1 req/s
 (burst 2). This is a mitigation, **not** authentication: all clients behind the
 ingress share the bucket, and a determined caller can still reach the data.
-`cmd/rawproxy` remains as an optional standalone binary for local testing; it
-is not deployed.
 
 ## Local daily report
 

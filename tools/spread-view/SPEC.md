@@ -360,50 +360,39 @@ context.
 | path | purpose |
 |---|---|
 | `internal/spread/types.go` | request/response structs, pair definitions, presets |
-| `internal/spread/store.go` | pgx queries above, row scanning, epoch conversions |
-| `internal/spread/http.go` | handlers, CORS, validation, cache, cursor logic |
-| `internal/spread/*_test.go` | unit tests (no live DB required) |
-| `cmd/spreadapi/main.go` | config, pgx pool, HTTP server, signal handling, slog logging |
+| `internal/spread/store.go` | read-only SQL, row scanning, epoch conversions |
+| `internal/spread/http.go` | handlers, cache, cursor logic; `RegisterAPI` mounts only the two pair paths |
+| `internal/spread/*_test.go` | fixture-backed contract tests (no live DB) |
+| `internal/rawproxy/*` | bounded rows/stats/sessions API (`MaxRows`, `MaxWindow`, symbol allow-list) |
+| `cmd/collector/main.go` | mounts both APIs on the existing ops server |
+| `tools/spread-view/index.html` | self-contained page |
 
-Configuration uses a dedicated ~20-line loader in `cmd/spreadapi`: `DB_DSN`
-with a `DATABASE_URL` fallback (mirroring `internal/config`) and `SPREAD_ADDR`
-(default `127.0.0.1:9091`). Do **not** import `internal/config`: its `Load()`
-validates `SYMBOLS`, intervals and retention, and defaults `METRICS_ADDR` to
-`:9090`, which would collide with the collector's ops port. No new credentials
-or config files in the repo.
-
-The service uses a separate `pgxpool`; it does not import or modify the
-collector's pipeline, ops server, writer, or coordinator. Shutdown on SIGINT /
-SIGTERM closes the HTTP server and pool.
+The APIs are mounted on the collector's ops server under `/api/v1/` via
+`ops.Server.Mount`. They use a dedicated `pgxpool` with `MaxConns = 2` so public
+query traffic cannot starve the writer's pool. Only `DB_DSN`/`DATABASE_URL` from
+the existing injected secret is needed; no second process, port, image or new
+credential is deployed. All SQL is read-only: no `migrate.Run`, DDL, or writes.
 
 ### 7.2 Local run
 
 ```
-DB_DSN='postgres://...' go run ./cmd/spreadapi
-curl 'http://127.0.0.1:9091/api/v1/spread?pair=XAU-XAG&range=1h'
+go test ./...
+go run ./cmd/collector run            # with DB_DSN and METRICS_ADDR set
+open tools/spread-view/index.html?api=http://127.0.0.1:9090
 ```
 
-### 7.3 Later deployment (after tuning)
+### 7.3 Deployment (shipped)
 
-- Use a **separate `Dockerfile.spreadapi`**, not a second stage in `Dockerfile`.
-  The existing Dockerfile ends with an unnamed distroless stage and
-  `northflank.json` sets no build `target`; BuildKit builds the last stage by
-  default. Appending a `spreadapi` runtime stage would make the existing
-  `weather-api` service build and run `/spreadapi` on 9091 while its liveness
-  probe calls `/healthz` on 9090. Service CI and template autorun are now
-  disabled, so this can only happen on a manual build/deploy, but the hazard
-  remains. Point the new service's `buildSettings.dockerfile.dockerFilePath` at
-  the new file and leave `Dockerfile` untouched.
-- Add a second Northflank service on its own authenticated port/ingress (§5.1),
-  linked to a **new secret** for a **read-only DB role**:
-  `CREATE ROLE spread_ro LOGIN ...; GRANT SELECT ON book_l1 TO spread_ro;`
-  (the grant on the partitioned parent covers future daily partitions). The
-  existing `API-KEYS` group maps the addon `POSTGRES_URI` to `DB_DSN` with
-  `restricted: false`, so linking it would hand the service the owner DSN.
-  `spreadapi` must never call `migrate.Run` or any DDL.
-- Do not commit a changed `northflank.json` until the local version is validated:
-  GitOps tracks `main` but template application and service CI are now manual
-  (`autorun: false`, `disabledCI: true`).
+`northflank.json` defines one service (`weather-api`) with GitOps linked,
+service CI disabled (`disabledCI: true`, `ciIgnoreFlagsEnabled: true`) and
+template autorun disabled (`autorun: false`). Builds and deploys are manual.
+
+Port 9090 is public and unauthenticated; it now exposes the whole `/api/v1/*`
+data surface, not just counters. An in-process token bucket limits general API
+traffic (20 req/s, burst 40) and `/api/v1/stats` (1 req/s, burst 2). This is a
+mitigation only: all clients behind the ingress share the bucket and the data
+is readable by anyone with the URL. A dedicated read-only DB role and platform
+basic-auth/private port remain deferred accepted risks (§10, §12.3).
 
 ---
 
@@ -476,10 +465,10 @@ JavaScript, plain `<canvas>` rendering, no CDN, no build step. Open via
 | Ask-to-ask differs from mid-to-mid | Documented in §2.4; accepted |
 | `ln(avg r)` differs from `avg(ln r)` | Documented in §3.4; optional `avg(ln r)` field later |
 | Browser local time + DST | Documented in §3.5; epoch seconds remain the wire format |
-| Reading pilot data from a local process | Read-only role before any deployment; no writes in SQL |
+| Reading pilot data from a local process | All API SQL is read-only; dedicated 2-connection pool; no writes or DDL |
 | Spread tests join pilot T1 (`go test ./...`) | Hermetic, sub-second, no DSN skips; DB checks only in the local smoke script |
-| Unauthenticated public spread service | Deployed service requires token or ingress credentials; wildcard CORS is local-only (§5.1) |
-| Last-stage-default Dockerfile build | Separate `Dockerfile.spreadapi`; never append a stage to `Dockerfile` (§7.3) |
+| Public unauthenticated port 9090 | Rate-limited (20 req/s burst 40; `/stats` 1 req/s burst 2) with a dedicated API pool. Accepted risk: anyone with the URL can read bounded L1 data; platform auth/private port deferred (§7.3) |
+| Last-stage-default Dockerfile build | No second Dockerfile; both APIs are compiled into the collector binary (§7.3) |
 | Manual deploy only (`disabledCI: true`, `autorun: false`) | Defer Dockerfile/Northflank changes until after tuning; applying the template change itself may cause one final run |
 | Repeated heavy polling | Cursor-based incremental query with `LIMIT 500`, no cache on live |
 
@@ -488,16 +477,15 @@ JavaScript, plain `<canvas>` rendering, no CDN, no build step. Open via
 ## 11. Implementation order
 
 1. `internal/spread` types, presets, SQL store, HTTP handlers, unit tests.
-2. `cmd/spreadapi` main with config, pool, server, graceful shutdown.
-3. `tools/spread-view/index.html` single-file page.
-4. Local smoke tests against the deployed DB.
-5. Only after validation: separate `Dockerfile.spreadapi`, read-only role plus
-   new secret, and an authenticated Northflank service.
+2. `tools/spread-view/index.html` single-file page.
+3. Both APIs mounted on the collector's ops server with a dedicated pool.
+4. Local smoke tests against a temporary Postgres and fake exchange.
+5. Manual build/deploy of the single `weather-api` service.
 
-No step modifies the pilot collector, schema, retention, or acceptance tests.
-The §12 guardrails (read-only role, bounded pool/timeouts, contract tests, API
-health/metrics) belong to steps 1–4, not to the deferred deployment step. The
-read-only role must exist before any local smoke test touches the pilot DB.
+The collector was changed once by explicit decision to host the APIs (§7.1),
+deviating from the original freeze. The §12 guardrails still apply: bounded
+pool and timeouts, hermetic contract tests, API health/metrics, no schema or
+pipeline changes, and no further collector changes without sign-off.
 
 ---
 
@@ -508,30 +496,33 @@ restarts and therefore data gaps.
 
 ### 12.1 Freeze policy
 
-- **The collector is frozen from now**, including before T9 passes. It remains
-  ingestion-only; no viewer, API, or analytics features go into it.
-- The only permitted collector change is an emergency fix for a live data-loss
-  bug, with explicit sign-off, a scheduled window, and a verification run
-  afterwards. Cosmetic, refactor and feature changes are not sufficient reason.
+- The collector was frozen from 2026-11-28. One explicit exception was granted
+  to mount the read-only APIs on its existing ops server (§7.1) after the
+  single-service limit made a second deployment impossible. That change added
+  a dedicated 2-connection API pool, a bounded ring, a flush timeout and rate
+  limits; it did not change the schema, writer semantics or retention.
+- From now on the collector is frozen again. Any further collector change,
+  including cosmetic or refactor work, requires explicit sign-off, a scheduled
+  window, and a verification run afterwards. Feature work belongs in consumers.
 - Budget: ≥99.5 % coverage per symbol-day allows at most
   `86400 × 0.005 = 432 s` (7.2 min) of gap per day. One redeploy costs roughly
   20–40 s (container swap, pool connect, `migrate`, `Ensure`, `AssertStartup`
   with up to 15 one-second retries). Frequent deploys are the failure mode.
-- All change frequency moves to the consumers: the read API service and the
-  local page. Neither can write to `book_l1` nor restart the collector.
+- All change frequency moves to the page and the API consumers; neither can
+  write to `book_l1`.
 
 ### 12.2 API contract
 
-- The stable v1 surface is **only** `/api/v1/spread` and
-  `/api/v1/spread/live` at launch. No generic L1 query, bars, or analytics
-  endpoints yet; add them later through the change procedure below.
+- The stable v1 surface is `/api/v1/spread` and `/api/v1/spread/live`, plus the
+  read-only data endpoints `/api/v1/rows`, `/api/v1/stats` and
+  `/api/v1/sessions` added later through the change procedure below.
 - Versions live in the path (`/api/v1/...`). **Breaking changes are allowed**,
   but only through a coordinated upgrade:
   1. record the intended change in the change log (§12.5);
-  2. update the API, the page and any other consumers in the same change;
+  2. update the APIs, the page and any other consumers in the same change;
   3. update the golden contract fixtures/tests in the same commit;
   4. run hermetic tests plus the local smoke test;
-  5. manually deploy the API; the collector is untouched.
+  5. manually build and deploy the single `weather-api` service.
 - If any consumer cannot be upgraded in the same change, do **not** break v1 —
   publish the new shape under a new path version instead.
 - Silent changes (response shape, field type, units, timestamps, error codes)
@@ -542,33 +533,35 @@ restarts and therefore data gaps.
 
 ### 12.3 Guardrails (all required)
 
-- **Read-only DB access:** dedicated `spread_ro` role with `SELECT` on
-  `book_l1` and a new secret (§7.3); no `migrate.Run`, no DDL, no writes.
-- **Query isolation:** small pgx pool (`MaxConns` 2–4), `statement_timeout`
-  enforced via context (10 s history, 3 s live), explicit time bounds on every
-  query (including `latest`), both-leg range predicates, and the 60 s history
-  cache. Analytics work must not starve the collector's writer.
+- **Read-only DB access:** all API SQL is read-only; no `migrate.Run`, DDL, or
+  writes. The dedicated `spread_ro` role was deferred: the APIs currently use
+  the injected `DB_DSN`. This is an accepted, documented risk (§7.3, §10).
+- **Query isolation:** a dedicated pgx pool (`MaxConns = 2`, separate from the
+  writer pool), timeouts via context (10 s history, 3 s live, 10 s stats,
+  3 s flush), explicit time bounds on every query (including `latest`),
+  both-leg range predicates, and the 60 s history cache. Public queries must
+  not starve the collector's writer.
 - **Golden contract tests:** hermetic, sub-second, DSN-free tests under
-  `internal/spread` that assert the exact v1 JSON shape with fixed fixture
-  rows. They run inside pilot T1 (`go test ./...`) and must be updated in the
-  same commit as an intentional breaking change.
-- **API health and metrics:** `/healthz` (§5.4) plus a small local `/metrics`
-  on the same port (request counts, errors, cache hits, last query duration).
-  Implement these in the API service itself; do not import the collector's ops
-  package or bind its 9090 port.
+  `internal/spread` and `internal/rawproxy` that assert the exact v1 JSON
+  shapes with fixed fixture rows. They run inside pilot T1 (`go test ./...`)
+  and must be updated in the same commit as an intentional breaking change.
+- **API health and metrics:** collector `/healthz` and `/metrics`; API counters
+  at `/api/v1/rawproxy-metrics` and `/api/v1/spread-metrics`, mirrored into
+  the collector registry so `scripts/test.sh` can read them.
 
 ### 12.4 Deployment workflow
 
-- Collector: manual build/deploy only, in a scheduled window, after
-  verification. CI and template autorun remain disabled (`disabledCI: true`,
-  `autorun: false`).
-- API: separate image and service, also deployed manually; coordinated with
-  any page update that depends on a breaking contract change.
+- One service, `weather-api`: manual build/deploy only, in a scheduled window,
+  after verification. CI and template autorun remain disabled
+  (`disabledCI: true`, `autorun: false`).
 - Page: a local file in `tools/spread-view/`; change as often as needed, no
   deployment or restart involved.
-
+- No second image, service or Dockerfile is part of v1.
 ### 12.5 Change log
 
 | Date | Change | Contract impact |
 |---|---|---|
 | 2026-11-28 | Foundation defined: collector frozen, v1 = spread endpoints only, coordinated-breaking-change policy, guardrails above | none — API not yet implemented |
+| 2026-11-28 | APIs mounted on collector ops server with dedicated pool; single-service deployment; rate limits | additive — existing v1 shapes unchanged |
+| 2026-11-28 | Added `/api/v1/rows`, `/api/v1/stats`, `/api/v1/sessions` and API metrics endpoints | additive |
+| 2026-11-28 | Review fixes: separate API pool, bounded ring, flush timeout, shutdown order, rate limiting | none |

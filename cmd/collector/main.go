@@ -157,6 +157,9 @@ func serve(_ []string, doMigrate bool, log *slog.Logger) error {
 		time.Now, 1000, spreadMetrics,
 	).RegisterAPI(apiMux)
 	apiMux.Handle("/api/v1/spread-metrics", spreadMetrics.Handler())
+	// Mirror the API registries into /metrics so scripts/test.sh mget works.
+	reg.AddSource("rawproxy", rawMetrics.Render)
+	reg.AddSource("spread", spreadMetrics.Render)
 
 	// Public port mitigation: a shared token bucket, stricter on /stats because
 	// it runs four sequential queries under one 10 s context.

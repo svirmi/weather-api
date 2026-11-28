@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -115,33 +117,40 @@ func (m *Metrics) record(path string, failed, cacheHit bool, elapsed time.Durati
 	m.lastQueryMS = float64(elapsed) / float64(time.Millisecond)
 }
 
+// Render returns the metrics in plain text.
+func (m *Metrics) Render() string {
+	m.mu.Lock()
+	paths := make([]string, 0, len(m.requests))
+	for p := range m.requests {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	counts := make([]int64, len(paths))
+	for i, p := range paths {
+		counts[i] = m.requests[p]
+	}
+	errs, hits, last := m.errors, m.cacheHits, m.lastQueryMS
+	m.mu.Unlock()
+
+	var b strings.Builder
+	fmt.Fprintln(&b, "# TYPE spread_requests_total counter")
+	for i, p := range paths {
+		fmt.Fprintf(&b, "spread_requests_total{path=%q} %d\n", p, counts[i])
+	}
+	fmt.Fprintln(&b, "# TYPE spread_errors_total counter")
+	fmt.Fprintf(&b, "spread_errors_total %d\n", errs)
+	fmt.Fprintln(&b, "# TYPE spread_cache_hits_total counter")
+	fmt.Fprintf(&b, "spread_cache_hits_total %d\n", hits)
+	fmt.Fprintln(&b, "# TYPE spread_last_query_ms gauge")
+	fmt.Fprintf(&b, "spread_last_query_ms %g\n", last)
+	return b.String()
+}
+
 // Handler serves the metrics in plain text on the API's own port.
 func (m *Metrics) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		m.mu.Lock()
-		paths := make([]string, 0, len(m.requests))
-		for p := range m.requests {
-			paths = append(paths, p)
-		}
-		sort.Strings(paths)
-		counts := make([]int64, len(paths))
-		for i, p := range paths {
-			counts[i] = m.requests[p]
-		}
-		errs, hits, last := m.errors, m.cacheHits, m.lastQueryMS
-		m.mu.Unlock()
-
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		fmt.Fprintln(w, "# TYPE spread_requests_total counter")
-		for i, p := range paths {
-			fmt.Fprintf(w, "spread_requests_total{path=%q} %d\n", p, counts[i])
-		}
-		fmt.Fprintln(w, "# TYPE spread_errors_total counter")
-		fmt.Fprintf(w, "spread_errors_total %d\n", errs)
-		fmt.Fprintln(w, "# TYPE spread_cache_hits_total counter")
-		fmt.Fprintf(w, "spread_cache_hits_total %d\n", hits)
-		fmt.Fprintln(w, "# TYPE spread_last_query_ms gauge")
-		fmt.Fprintf(w, "spread_last_query_ms %g\n", last)
+		_, _ = io.WriteString(w, m.Render())
 	})
 }
 

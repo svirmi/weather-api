@@ -47,10 +47,20 @@ func (m *Metric) format() string {
 type Registry struct {
 	mu      sync.Mutex
 	metrics map[string]*Metric
+	sources map[string]func() string
 }
 
 func NewRegistry() *Registry {
-	return &Registry{metrics: make(map[string]*Metric)}
+	return &Registry{metrics: make(map[string]*Metric), sources: make(map[string]func() string)}
+}
+
+// AddSource appends an external metric registry's text to Render. Sources are
+// used for the read-only APIs mounted on the collector's ops server; their
+// metric names are distinct from the collector's own.
+func (r *Registry) AddSource(name string, fn func() string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sources[name] = fn
 }
 
 func (r *Registry) Counter(name string, labels map[string]string) *Metric {
@@ -92,6 +102,15 @@ func (r *Registry) Render() string {
 	for _, m := range r.metrics {
 		all = append(all, m)
 	}
+	names := make([]string, 0, len(r.sources))
+	for name := range r.sources {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	sources := make([]func() string, 0, len(names))
+	for _, name := range names {
+		sources = append(sources, r.sources[name])
+	}
 	r.mu.Unlock()
 	sort.Slice(all, func(i, j int) bool {
 		return metricKey(all[i].name, all[i].labels) < metricKey(all[j].name, all[j].labels)
@@ -123,6 +142,11 @@ func (r *Registry) Render() string {
 		b.WriteByte(' ')
 		b.WriteString(m.format())
 		b.WriteByte('\n')
+	}
+	for _, source := range sources {
+		if text := source(); text != "" {
+			b.WriteString(text)
+		}
 	}
 	return b.String()
 }

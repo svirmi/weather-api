@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -134,29 +136,36 @@ func (m *Metrics) record(path string, failed bool) {
 	}
 }
 
+// Render returns the counters in plain text.
+func (m *Metrics) Render() string {
+	m.mu.Lock()
+	paths := make([]string, 0, len(m.requests))
+	for p := range m.requests {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	counts := make([]int64, len(paths))
+	for i, p := range paths {
+		counts[i] = m.requests[p]
+	}
+	errs := m.errors
+	m.mu.Unlock()
+
+	var b strings.Builder
+	fmt.Fprintln(&b, "# TYPE rawproxy_requests_total counter")
+	for i, p := range paths {
+		fmt.Fprintf(&b, "rawproxy_requests_total{path=%q} %d\n", p, counts[i])
+	}
+	fmt.Fprintln(&b, "# TYPE rawproxy_errors_total counter")
+	fmt.Fprintf(&b, "rawproxy_errors_total %d\n", errs)
+	return b.String()
+}
+
 // Handler serves the counters in plain text.
 func (m *Metrics) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		m.mu.Lock()
-		paths := make([]string, 0, len(m.requests))
-		for p := range m.requests {
-			paths = append(paths, p)
-		}
-		sort.Strings(paths)
-		counts := make([]int64, len(paths))
-		for i, p := range paths {
-			counts[i] = m.requests[p]
-		}
-		errs := m.errors
-		m.mu.Unlock()
-
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		fmt.Fprintln(w, "# TYPE rawproxy_requests_total counter")
-		for i, p := range paths {
-			fmt.Fprintf(w, "rawproxy_requests_total{path=%q} %d\n", p, counts[i])
-		}
-		fmt.Fprintln(w, "# TYPE rawproxy_errors_total counter")
-		fmt.Fprintf(w, "rawproxy_errors_total %d\n", errs)
+		_, _ = io.WriteString(w, m.Render())
 	})
 }
 
