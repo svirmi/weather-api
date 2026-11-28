@@ -1,0 +1,488 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pair Spread · 1 Hz L1 feed</title>
+<style>
+  :root {
+    --bg: #080d17;
+    --panel: #0f1726;
+    --line: #1e293b;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --accent: #38bdf8;
+    --red: #f87171;
+    --green: #34d399;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 20px 24px 32px;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+  h1 { font-size: 20px; margin: 0; font-weight: 650; letter-spacing: -0.2px; }
+  .toggle { display: flex; gap: 8px; }
+  button {
+    font: inherit;
+    color: var(--muted);
+    background: transparent;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 6px 12px;
+    cursor: pointer;
+  }
+  button:hover { color: var(--text); border-color: #334155; }
+  button.active { color: var(--accent); border-color: var(--accent); background: rgba(56,189,248,0.08); }
+  .badge { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .badge strong { color: var(--text); font-weight: 600; }
+  #status { margin-left: auto; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+  #status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  #status.ok .dot { background: var(--green); }
+  #status.error .dot { background: var(--red); }
+  #status.error { color: var(--red); }
+  .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; min-height: 76px; }
+  .card .sym { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 6px; }
+  .card .sym::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #475569; }
+  .card .val { font-size: 19px; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .card .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; position: relative; }
+  .ranges { display: flex; gap: 8px; margin-bottom: 12px; }
+  .ranges button { padding: 4px 12px; font-size: 12px; }
+  canvas { display: block; width: 100%; }
+  #chart { height: 420px; }
+  #logchart { height: 110px; margin-top: 8px; border-top: 1px solid var(--line); padding-top: 6px; }
+  #tooltip {
+    position: absolute; pointer-events: none; display: none;
+    background: #020617; border: 1px solid #334155; border-radius: 8px;
+    padding: 8px 10px; font-size: 12px; color: var(--text);
+    white-space: pre; font-variant-numeric: tabular-nums; z-index: 5;
+  }
+  .foot { color: #64748b; font-size: 11px; margin-top: 10px; }
+  @media (max-width: 800px) { .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Pair Spread · 1 Hz L1 feed</h1>
+  <div class="toggle">
+    <button id="pair-xau" data-pair="XAU-XAG">Gold / Silver</button>
+    <button id="pair-xpt" data-pair="XPT-XPD">Platinum / Palladium</button>
+  </div>
+  <div class="badge" id="badge">—</div>
+  <div id="status"><span class="dot"></span><span id="status-text">connecting…</span></div>
+</header>
+
+<div class="cards" id="cards"></div>
+
+<div class="panel">
+  <div class="ranges" id="ranges">
+    <button data-range="45d">45D</button>
+    <button data-range="7d">7D</button>
+    <button data-range="1d">1D</button>
+    <button data-range="8h">8H</button>
+    <button data-range="1h">1H</button>
+    <button data-range="LIVE">LIVE</button>
+  </div>
+  <canvas id="chart"></canvas>
+  <canvas id="logchart"></canvas>
+  <div id="tooltip"></div>
+</div>
+<div class="foot">Local viewer — data from <span id="api-base"></span> (override with ?api=…). Times shown in browser local time.</div>
+
+<script>
+"use strict";
+
+const params = new URLSearchParams(location.search);
+const API = params.get("api") || "http://127.0.0.1:9091";
+document.getElementById("api-base").textContent = API;
+
+const PAIRS = {
+  "XAU-XAG": { label: "Gold / Silver", num: "XAUUSDT", den: "XAGUSDT", short: "XAU/XAG" },
+  "XPT-XPD": { label: "Platinum / Palladium", num: "XPTUSDT", den: "XPDUSDT", short: "XPT/XPD" }
+};
+const RANGES = [
+  { id: "45d", bucketSec: 900 },
+  { id: "7d",  bucketSec: 300 },
+  { id: "1d",  bucketSec: 60 },
+  { id: "8h",  bucketSec: 15 },
+  { id: "1h",  bucketSec: 1 },
+  { id: "LIVE", bucketSec: 1 }
+];
+const MAX_LIVE_POINTS = 300;
+
+const state = {
+  pair: "XAU-XAG",
+  range: "LIVE",
+  history: [],
+  bucketSec: 1,
+  liveByPair: {},
+  cursors: {},
+  latestByPair: {},
+  pollTimer: null,
+  polling: false,
+  status: "ok",
+  hover: null,
+  xForT: null,
+  tForX: null,
+  pointsForHover: []
+};
+
+const $ = (id) => document.getElementById(id);
+const chart = $("chart");
+const logchart = $("logchart");
+const tooltip = $("tooltip");
+
+function rangeCfg(id) { return RANGES.find((r) => r.id === id) || RANGES[RANGES.length - 1]; }
+
+function setStatus(kind, message) {
+  state.status = kind;
+  const el = $("status");
+  el.className = kind;
+  $("status-text").textContent = message;
+}
+
+async function getJSON(url) {
+  const res = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!res.ok) throw new Error("HTTP " + res.status);
+  return res.json();
+}
+
+function liveURL(pair) {
+  const cursor = state.cursors[pair];
+  let url = API + "/api/v1/spread/live?pair=" + encodeURIComponent(pair) + "&_=" + Date.now();
+  if (cursor != null) url += "&after=" + cursor;
+  return url;
+}
+
+function activePoints() {
+  if (state.range === "LIVE") {
+    return (state.liveByPair[state.pair] || []).map((p) => ({
+      t: p.t, ratio: p.ratio, lo: p.ratio, hi: p.ratio, n: 1
+    }));
+  }
+  return state.history;
+}
+
+function lastValue(pair) {
+  if (state.latestByPair[pair]) return state.latestByPair[pair];
+  const live = state.liveByPair[pair];
+  if (live && live.length) return live[live.length - 1];
+  return null;
+}
+
+function scheduleNext(ms) {
+  clearTimeout(state.pollTimer);
+  state.pollTimer = setTimeout(pollLive, ms || 1000);
+}
+
+function stopPolling() {
+  clearTimeout(state.pollTimer);
+  state.pollTimer = null;
+  state.polling = false;
+}
+
+async function pollLive() {
+  if (state.polling) return;
+  state.polling = true;
+  let interval = 1000;
+  try {
+    const pairs = Object.keys(PAIRS);
+    const responses = await Promise.all(pairs.map((p) => getJSON(liveURL(p))));
+    pairs.forEach((p, i) => {
+      const r = responses[i];
+      state.cursors[p] = r.cursor;
+      if (r.latest) state.latestByPair[p] = r.latest;
+      if (r.points && r.points.length) {
+        const prev = state.liveByPair[p] || [];
+        state.liveByPair[p] = prev.concat(r.points).slice(-MAX_LIVE_POINTS);
+      }
+      if (r.pollMs) interval = r.pollMs;
+    });
+    setStatus(state.liveByPair[state.pair] && state.liveByPair[state.pair].length ? "ok" : "empty",
+              state.liveByPair[state.pair] && state.liveByPair[state.pair].length ? "live" : "no data in range");
+  } catch (e) {
+    setStatus("error", "spread fetch failed");
+  } finally {
+    state.polling = false;
+    if (state.range === "LIVE") scheduleNext(interval);
+    render();
+  }
+}
+
+async function loadHistory() {
+  const url = API + "/api/v1/spread?pair=" + encodeURIComponent(state.pair) + "&range=" + encodeURIComponent(state.range);
+  try {
+    const r = await getJSON(url);
+    state.history = r.points || [];
+    state.bucketSec = r.bucketSec || rangeCfg(state.range).bucketSec;
+    setStatus(state.history.length ? "ok" : "empty", state.history.length ? "historical" : "no data in range");
+  } catch (e) {
+    state.history = [];
+    setStatus("error", "spread fetch failed");
+  }
+  render();
+}
+
+function setRange(id) {
+  stopPolling();
+  state.range = id;
+  state.hover = null;
+  [...$("ranges").children].forEach((b) => b.classList.toggle("active", b.dataset.range === id));
+  if (id === "LIVE") pollLive();
+  else loadHistory();
+}
+
+function setPair(id) {
+  state.pair = id;
+  state.hover = null;
+  [...document.querySelectorAll(".toggle button")].forEach((b) => b.classList.toggle("active", b.dataset.pair === id));
+  if (state.range === "LIVE") pollLive();
+  else loadHistory();
+}
+
+function renderCards() {
+  const cards = $("cards");
+  cards.innerHTML = "";
+  const symbols = ["XAUUSDT", "XAGUSDT", "XPTUSDT", "XPDUSDT"];
+  const nowSec = Math.floor(Date.now() / 1000);
+  for (const sym of symbols) {
+    const pid = Object.keys(PAIRS).find((p) => PAIRS[p].num === sym || PAIRS[p].den === sym);
+    const latest = lastValue(pid);
+    const value = latest ? (PAIRS[pid].num === sym ? latest.askA : latest.askB) : null;
+    const el = document.createElement("div");
+    el.className = "card";
+    const symEl = document.createElement("div");
+    symEl.className = "sym";
+    symEl.textContent = sym;
+    const valEl = document.createElement("div");
+    valEl.className = "val";
+    valEl.textContent = value == null ? "no data" : Number(value).toFixed(4);
+    const subEl = document.createElement("div");
+    subEl.className = "sub";
+    if (latest && value != null) {
+      const age = Math.max(0, nowSec - Number(latest.t));
+      subEl.textContent = age + "s ago";
+    } else {
+      subEl.textContent = "no rows in table";
+    }
+    el.append(symEl, valEl, subEl);
+    cards.appendChild(el);
+  }
+  const latest = lastValue(state.pair);
+  $("badge").innerHTML = "";
+  const strong = document.createElement("strong");
+  strong.textContent = latest ? " " + Number(latest.ratio).toFixed(6) : " —";
+  $("badge").append(document.createTextNode(PAIRS[state.pair].short), strong);
+}
+
+function prep(canvas) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
+    canvas.width = Math.round(w * dpr);
+    canvas.height = Math.round(h * dpr);
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  return { ctx, w, h };
+}
+
+function segments(points, bucketSec) {
+  const out = [];
+  let cur = [];
+  for (let i = 0; i < points.length; i++) {
+    if (i > 0 && points[i].t - points[i - 1].t > bucketSec * 1.5) {
+      if (cur.length) out.push(cur);
+      cur = [];
+    }
+    cur.push(points[i]);
+  }
+  if (cur.length) out.push(cur);
+  return out;
+}
+
+function fmtTime(t, range) {
+  const d = new Date(t * 1000);
+  const p = (n) => String(n).padStart(2, "0");
+  if (range === "45d" || range === "7d") return (d.getMonth() + 1) + "/" + d.getDate();
+  if (range === "1d") return p(d.getHours()) + ":" + p(d.getMinutes());
+  return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds());
+}
+
+function draw(canvas, points, kind) {
+  const { ctx, w, h } = prep(canvas);
+  const pad = { l: 68, r: 14, t: 14, b: 26 };
+  const pw = w - pad.l - pad.r;
+  const ph = h - pad.t - pad.b;
+  state.xForT = null;
+  state.tForX = null;
+
+  if (!points.length || pw <= 0 || ph <= 0) {
+    ctx.fillStyle = "#64748b";
+    ctx.textAlign = "center";
+    ctx.fillText("no data in range", w / 2, h / 2);
+    return;
+  }
+
+  const val = (p) => (kind === "log" ? Math.log(p.ratio) : p.ratio);
+  const vals = points.map(val);
+  let lo = Math.min.apply(null, vals);
+  let hi = Math.max.apply(null, vals);
+  if (kind === "main") {
+    lo = Math.min(lo, Math.min.apply(null, points.map((p) => p.lo)));
+    hi = Math.max(hi, Math.max.apply(null, points.map((p) => p.hi)));
+  }
+  const span = hi - lo || Math.abs(hi) * 0.01 || 1;
+  lo -= span * 0.08;
+  hi += span * 0.08;
+
+  const t0 = points[0].t;
+  const t1 = points[points.length - 1].t;
+  const xForT = (t) => pad.l + ((t - t0) / (t1 - t0 || 1)) * pw;
+  const tForX = (x) => t0 + ((x - pad.l) / pw) * (t1 - t0);
+  const yForV = (v) => pad.t + ((hi - v) / (hi - lo || 1)) * ph;
+  state.xForT = xForT;
+  state.tForX = tForX;
+  state.pointsForHover = points;
+
+  ctx.strokeStyle = "#1e293b";
+  ctx.fillStyle = "#64748b";
+  ctx.lineWidth = 1;
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  for (let i = 0; i <= 4; i++) {
+    const v = lo + (hi - lo) * i / 4;
+    const y = Math.round(yForV(v)) + 0.5;
+    ctx.beginPath();
+    ctx.moveTo(pad.l, y);
+    ctx.lineTo(w - pad.r, y);
+    ctx.stroke();
+    ctx.fillText(v.toFixed(kind === "log" ? 4 : 6), pad.l - 8, y);
+  }
+
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  for (let i = 0; i <= 5; i++) {
+    const t = t0 + (t1 - t0) * i / 5;
+    const x = xForT(t);
+    ctx.fillText(fmtTime(t, state.range), x, h - pad.b + 6);
+  }
+
+  const segs = segments(points, state.bucketSec);
+  if (kind === "main") {
+    ctx.fillStyle = "rgba(56,189,248,0.13)";
+    for (const seg of segs) {
+      ctx.beginPath();
+      seg.forEach((p, i) => {
+        const x = xForT(p.t), y = yForV(p.hi);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      for (let i = seg.length - 1; i >= 0; i--) ctx.lineTo(xForT(seg[i].t), yForV(seg[i].lo));
+      ctx.closePath();
+      ctx.fill();
+    }
+  }
+
+  ctx.strokeStyle = kind === "main" ? "#38bdf8" : "#a78bfa";
+  ctx.lineWidth = 1.5;
+  for (const seg of segs) {
+    ctx.beginPath();
+    seg.forEach((p, i) => {
+      const x = xForT(p.t), y = yForV(val(p));
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  }
+
+  if (state.hover != null && state.hover < points.length) {
+    const p = points[state.hover];
+    const x = xForT(p.t);
+    ctx.strokeStyle = "#64748b";
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(x, pad.t);
+    ctx.lineTo(x, h - pad.b);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+}
+
+function showTooltip(x, y) {
+  const pts = state.pointsForHover;
+  if (!pts.length || state.hover == null) { tooltip.style.display = "none"; return; }
+  const p = pts[state.hover];
+  const lines = [
+    new Date(p.t * 1000).toLocaleString(),
+    "ratio  " + Number(p.ratio).toFixed(6),
+    "log    " + Math.log(p.ratio).toFixed(4),
+    "lo/hi  " + Number(p.lo).toFixed(6) + " / " + Number(p.hi).toFixed(6),
+    "asks   " + Number(p.askA == null ? NaN : p.askA).toFixed(4) + " / " + Number(p.askB == null ? NaN : p.askB).toFixed(4),
+    "n      " + (p.n == null ? 1 : p.n)
+  ];
+  tooltip.textContent = lines.join("\n");
+  tooltip.style.display = "block";
+  const panel = chart.parentElement;
+  tooltip.style.left = Math.min(x + 14, panel.clientWidth - 210) + "px";
+  tooltip.style.top = Math.max(4, y - 10) + "px";
+}
+
+function onMove(ev, canvas) {
+  if (!state.tForX || !state.pointsForHover.length) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = ev.clientX - rect.left;
+  const t = state.tForX(x);
+  const pts = state.pointsForHover;
+  let best = 0;
+  let bestD = Infinity;
+  for (let i = 0; i < pts.length; i++) {
+    const d = Math.abs(pts[i].t - t);
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  state.hover = best;
+  render();
+  showTooltip(x, ev.clientY - rect.top);
+}
+
+function onLeave() {
+  state.hover = null;
+  tooltip.style.display = "none";
+  render();
+}
+
+function render() {
+  renderCards();
+  [...document.querySelectorAll(".toggle button")].forEach((b) => b.classList.toggle("active", b.dataset.pair === state.pair));
+  const pts = activePoints();
+  draw(chart, pts, "main");
+  draw(logchart, pts, "log");
+  if (state.hover != null) {
+    const p = pts[state.hover];
+    if (p && state.xForT) showTooltip(state.xForT(p.t), 40);
+  }
+}
+
+$("ranges").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-range]");
+  if (b) setRange(b.dataset.range);
+});
+document.querySelector(".toggle").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-pair]");
+  if (b) setPair(b.dataset.pair);
+});
+chart.addEventListener("mousemove", (e) => onMove(e, chart));
+logchart.addEventListener("mousemove", (e) => onMove(e, logchart));
+chart.addEventListener("mouseleave", onLeave);
+logchart.addEventListener("mouseleave", onLeave);
+window.addEventListener("resize", render);
+
+setRange("LIVE");
+</script>
+</body>
+</html>
