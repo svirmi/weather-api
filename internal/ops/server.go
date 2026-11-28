@@ -14,6 +14,7 @@ import (
 // PostgreSQL: a short DB outage must not restart the collector.
 type Server struct {
 	srv     *http.Server
+	mux     *http.ServeMux
 	health  atomic.Bool
 	log     *slog.Logger
 	metrics *Registry
@@ -33,12 +34,19 @@ func NewServer(addr string, metrics *Registry, log *slog.Logger) *Server {
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	mux.Handle("/metrics", metrics.Handler())
+	s.mux = mux
 	s.srv = &http.Server{
 		Addr:              addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 2 * time.Second,
 	}
 	return s
+}
+
+// Mount attaches an additional handler tree under prefix. It must be called
+// before Start. The handler receives the full request path.
+func (s *Server) Mount(prefix string, handler http.Handler) {
+	s.mux.Handle(prefix, handler)
 }
 
 // Start binds synchronously so startup errors surface immediately.

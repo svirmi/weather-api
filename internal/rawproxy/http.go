@@ -127,12 +127,20 @@ func NewHandler(store StoreReader, now func() time.Time, metrics *Metrics) *Hand
 	return &Handler{Store: store, Now: now, Metrics: metrics}
 }
 
-// Register attaches routes. Callers wrap the mux with DefaultMiddleware.
-func (h *Handler) Register(mux *http.ServeMux) {
+// RegisterAPI attaches only the data endpoints. Use this when mounting the
+// proxy inside another service that already has /healthz and /metrics.
+func (h *Handler) RegisterAPI(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/rows", h.handleRows)
 	mux.HandleFunc("/api/v1/spread", h.handleSpread)
 	mux.HandleFunc("/api/v1/sessions", h.handleSessions)
 	mux.HandleFunc("/api/v1/stats", h.handleStats)
+	mux.Handle("/api/v1/metrics", h.Metrics.Handler())
+}
+
+// Register attaches all routes, including standalone health and metrics.
+// Callers wrap the mux with DefaultMiddleware.
+func (h *Handler) Register(mux *http.ServeMux) {
+	h.RegisterAPI(mux)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
