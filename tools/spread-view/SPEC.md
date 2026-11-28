@@ -387,8 +387,9 @@ curl 'http://127.0.0.1:9091/api/v1/spread?pair=XAU-XAG&range=1h'
   `northflank.json` sets no build `target`; BuildKit builds the last stage by
   default. Appending a `spreadapi` runtime stage would make the existing
   `weather-api` service build and run `/spreadapi` on 9091 while its liveness
-  probe calls `/healthz` on 9090 — with `autorun: true`, on the next push to
-  `main`. Point the new service's `buildSettings.dockerfile.dockerFilePath` at
+  probe calls `/healthz` on 9090. Service CI and template autorun are now
+  disabled, so this can only happen on a manual build/deploy, but the hazard
+  remains. Point the new service's `buildSettings.dockerfile.dockerFilePath` at
   the new file and leave `Dockerfile` untouched.
 - Add a second Northflank service on its own authenticated port/ingress (§5.1),
   linked to a **new secret** for a **read-only DB role**:
@@ -398,7 +399,8 @@ curl 'http://127.0.0.1:9091/api/v1/spread?pair=XAU-XAG&range=1h'
   `restricted: false`, so linking it would hand the service the owner DSN.
   `spreadapi` must never call `migrate.Run` or any DDL.
 - Do not commit a changed `northflank.json` until the local version is validated:
-  GitOps tracks `main` and commits deploy automatically.
+  GitOps tracks `main` but template application and service CI are now manual
+  (`autorun: false`, `disabledCI: true`).
 
 ---
 
@@ -475,7 +477,7 @@ JavaScript, plain `<canvas>` rendering, no CDN, no build step. Open via
 | Spread tests join pilot T1 (`go test ./...`) | Hermetic, sub-second, no DSN skips; DB checks only in the local smoke script |
 | Unauthenticated public spread service | Deployed service requires token or ingress credentials; wildcard CORS is local-only (§5.1) |
 | Last-stage-default Dockerfile build | Separate `Dockerfile.spreadapi`; never append a stage to `Dockerfile` (§7.3) |
-| GitOps deploys on commit to `main` | Defer Dockerfile/Northflank changes until after tuning |
+| Manual deploy only (`disabledCI: true`, `autorun: false`) | Defer Dockerfile/Northflank changes until after tuning; applying the template change itself may cause one final run |
 | Repeated heavy polling | Cursor-based incremental query with `LIMIT 500`, no cache on live |
 
 ---

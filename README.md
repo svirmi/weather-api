@@ -61,12 +61,14 @@ is a GitOps template describing the equivalent resources:
 - a secret group that links the addon's `POSTGRES_URI` to the collector's
   `DB_DSN` (no credentials are stored in this repo);
 - a combined service built from this repo's Dockerfile on branch `main`,
-  public HTTP port 9090, scaled to 1 instance with CI enabled.
+  public HTTP port 9090, scaled to 1 instance with **CI disabled**.
 
 One-time setup: create a template linked to this repository, branch `main`,
-path `/northflank.json`, enable GitOps and "run automatically when the template
-is updated". Every push to `main` then rebuilds and redeploys the collector.
-See `RUNBOOK.md` for details.
+path `/northflank.json`, with GitOps enabled but "run automatically when the
+template is updated" **disabled**. Service CI is also off (`disabledCI: true`),
+so pushes to `main` no longer rebuild or redeploy the collector; builds and
+deploys are manual from the Northflank service menu. Commit-message skip flags
+are enabled as a second safeguard. See `RUNBOOK.md` for details.
 
 ## Status
 

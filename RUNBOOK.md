@@ -103,12 +103,21 @@ template describing the remote pilot:
 2. A secret group that maps the addon's `POSTGRES_URI` to `DB_DSN`. Credentials
    live only in Northflank — never in this repository.
 3. A combined service (`weather-api`) built from this repo on `main`, public
-   HTTP port 9090, 1 instance, CI enabled, build cache disabled.
+   HTTP port 9090, 1 instance, **CI disabled**, build cache disabled.
 
 One-time setup: create a template linked to this repository/branch `main`, path
-`/northflank.json`, enable GitOps and **run automatically when the template is
-updated**. Pushes to `main` rebuild and redeploy the collector; the collector's
+`/northflank.json`, with GitOps enabled but **run automatically when the
+template is updated disabled**. Both triggers are off: service CI
+(`disabledCI: true`) and template autorun (`options.autorun: false`). Pushes to
+`main` no longer restart the pilot. To ship a change, trigger a build manually
+from the service menu, then deploy that build (confirm in the UI whether a
+manual build on a combined service deploys automatically). The collector's
 `run` subcommand self-migrates a fresh addon database automatically.
+
+The commit that switches `autorun` off may itself be the last automatic template
+run, so expect one final restart when you apply this change. Make template
+changes in one place only: GitOps is bidirectional and UI edits are committed
+back to `main`.
 
 If you no longer want a template, disable GitOps in Northflank **before**
 deleting `northflank.json`.

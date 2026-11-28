@@ -131,7 +131,7 @@
                     "mode": "leastConnection"
                   },
                   "buildSource": "git",
-                  "disabledCI": false,
+                  "disabledCI": true,
                   "vcsData": {
                     "projectUrl": "https://github.com/svirmi/weather-api",
                     "projectType": "github",
@@ -176,7 +176,7 @@
                   "buildConfiguration": {
                     "pathIgnoreRules": [],
                     "isAllowList": false,
-                    "ciIgnoreFlagsEnabled": false
+                    "ciIgnoreFlagsEnabled": true
                   },
                   "buildArguments": {}
                 },
@@ -189,7 +189,7 @@
     }
   },
   "options": {
-    "autorun": true,
+    "autorun": false,
     "concurrencyPolicy": "queue"
   },
   "gitops": {
